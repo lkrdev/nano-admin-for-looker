@@ -1,0 +1,24 @@
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "Looker Admin Extension Backend (GCF)",
+  "private": true,
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "gcp-build": "tsc",
+    "dev": "tsc && functions-framework --target=nanoAdminBackend --port=8081",
+    "start": "functions-framework --target=nanoAdminBackend --port=8081"
+  },
+  "dependencies": {
+    "@google-cloud/functions-framework": "^3.1.2",
+    "@looker/sdk": "^23.0.0",
+    "@looker/sdk-node": "^23.0.0",
+    "cors": "^2.8.5"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.12",
+    "@types/node": "^18.11.9",
+    "typescript": "^4.9.4"
+  }
+}

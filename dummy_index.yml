@@ -1,0 +1,9 @@
+adminPages:
+  - route: "/user-audit"
+    label: "User Audit Dashboard"
+    authorized_groups:
+      - "3"
+  - route: "/cache-purge"
+    label: "Cache Purge Utility"
+    authorized_groups:
+      - "5"
