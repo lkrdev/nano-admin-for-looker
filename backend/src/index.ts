@@ -27,6 +27,7 @@ try {
 
 const HMAC_SECRET = process.env.GCF_HMAC_SECRET || 'default_secret_for_nano_admin_challenges';
 
+//TODO: Move these next two function defs to their own file 
 function generateChallengeToken(userId: string): string {
   const timestamp = Date.now();
   const random = crypto.randomBytes(8).toString('hex');
@@ -68,6 +69,8 @@ function verifyChallengeToken(userId: string, token: string): boolean {
   }
 }
 
+
+//TODO: Externalize challenge attribute logic to its own file/folder
 let challengeAttributeId: string | null = null;
 
 async function getChallengeAttributeId(): Promise<string | null> {
@@ -75,6 +78,7 @@ async function getChallengeAttributeId(): Promise<string | null> {
   if (!sdk) return null;
   try {
     const attrs = await sdk.ok(sdk.all_user_attributes({ fields: 'id,name' }));
+    //TODO: ^ Pull attribute's domain whitelist to enforce that the attribute is securely configured
     const attr = attrs.find((a: any) => a.name === 'nano_admin_challenge' || a.name === 'nano_admin_admin_extension_nano_admin_challenge');
     if (attr) {
       challengeAttributeId = String(attr.id);
@@ -92,6 +96,7 @@ async function refreshChallenge(userId: string): Promise<string> {
     const attrId = await getChallengeAttributeId();
     if (attrId) {
       console.log(`Setting nano_admin_challenge for user ${userId} to: ${newChallenge}`);
+      //TODO: Add some sort of rate limit against this mutating endpoint to prevent DoS via this pre-authenticated request
       await sdk.ok(sdk.set_user_attribute_user_value(userId, attrId, { value: newChallenge }));
     } else {
       console.error('nano_admin_challenge user attribute ID not found on Looker instance.');
@@ -115,7 +120,12 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
     }
 
     const { action, user } = req.body;
+    //TODO: ^ A code path that exposes an unauthenticated user ID (even if followed by a conditional check later)
+    // is just asking for authentication bugs. Do not pull an unauthenticated value from the request, instead return
+    // the authenticated value from the verification function and use that. The only code that should be looking at 
+    // the unauthenticated values is the verification code.
 
+    //TODO: This log is confusingly emitted before the validation/authentication of the parameters it purports to log
     console.log(`[${new Date().toISOString()}] Action: "${action}" triggered by user:`, user);
 
     if (!action) {
@@ -129,7 +139,13 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
     }
 
     // 1. Perform Challenge-Response Authentication
+    // TODO: ^ This "heading" should be a function call. Externalize
     const challenge = req.headers['x-nano-admin-challenge'] as string;
+    //TODO: ^ this header wants to be the standard "Authorization" header. It can contain an extensible type:
+    //      e.g., Authorization: looker-attribute-challenge <challenge>
+    //TODO: To get the user ID (within the verification function), let's also use a header
+    //      (Rather than our frontend, Looker can insert User ID as that is also a system-defined user attribute)
+    //TODO: Remove mock code paths below
     const isMock = !sdk;
     let isAuthenticated = false;
     
@@ -143,7 +159,8 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
 
     if (!isAuthenticated) {
       console.log(`Authentication failed for user ${user.id}. Challenge in header: "${challenge}"`);
-      
+      //TODO: ^ Do not log the challenge value
+
       let newChallenge = '';
       if (!isMock) {
         try {
@@ -157,6 +174,9 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
         newChallenge = 'valid_mock_challenge';
       }
 
+      //TODO: Can we try dividing the responses between an invalid challenge and a merely missing/expired challenge?
+      //      In the latter case, I think we can leverage a 307 redirect (to the same endpoint path) to transparently
+      //      have the client retry the call, which should then succeed
       res.status(401).json({
         error: 'challenge_required',
         message: 'A fresh cryptographic challenge is required. The challenge has been written to your user attribute. Please retry the request.',
@@ -168,7 +188,9 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
 
     // 2. Execute Action
     try {
+      //TODO: The list of available actions will eventually be loaded at runtime, so we should use a hashmap instead
       switch (action) {
+          //TODO: All branches/blocks absolutely need to be in their own files
         case 'get_admin_pages': {
           let pagesData: any = null;
           let sdkUsed = false;
@@ -191,6 +213,7 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
             try {
               console.log('Fetching index.md from project nano_admin...');
               const fileObj = await sdk.ok(sdk.project_file('nano_admin', 'index.md', 'id,path,title,type,text'));
+              //TODO: ^ Add the ability to cache this result (globally across all users) for a duration specified by an ENV var. Default to 0.
               console.log('Successfully fetched index.md metadata:', fileObj);
               
               if (fileObj && fileObj.text) {
@@ -213,6 +236,7 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
           }
 
           // Authorize pages based on group membership
+          //TODO: this is a different code path than checkAuthorization. Use the same function/logic.
           const authorizedPages = (pagesData.adminPages || []).map((page: any) => {
             let authorized = true;
             if (page.authorized_groups && page.authorized_groups.length > 0) {
@@ -382,6 +406,7 @@ function parseYaml(yamlStr: string): any {
   return { adminPages: pages };
 }
 
+//TODO: remove mock logic
 function getMockAdminPages() {
   return {
     adminPages: [
@@ -391,6 +416,7 @@ function getMockAdminPages() {
   };
 }
 
+//TODO: remove mock logic
 function getMockUsers() {
   return [
     { id: 1, first_name: 'Alice', last_name: 'Smith', email: 'alice.smith@example.com', is_disabled: false },

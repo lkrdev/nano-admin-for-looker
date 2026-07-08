@@ -11,3 +11,4 @@ looker.ini
 # extension/dist/
 /extension/dist/
 /backend/dist/
+deploy-config.json

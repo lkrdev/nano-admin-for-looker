@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { LookerExtensionSDK } from '@looker/extension-sdk';
 import './App.css';
 import { BUILD_HASH } from './build_hash';
+import { BACKEND_URL } from './config';
 
 interface AppProps {
   extensionSDK: any;
@@ -65,7 +66,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
           'X-Nano-Admin-Challenge': extensionSDK.createSecretKeyTag('nano_admin_challenge')
         };
         
-        let response = await extensionSDK.serverProxy('http://localhost:8081', {
+        let response = await extensionSDK.serverProxy(BACKEND_URL, {
           method: 'POST',
           headers,
           body: JSON.stringify(payload)
@@ -75,7 +76,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
           addLog('Challenge required or expired. Retrying admin pages fetch...');
           const errData = response.body;
           checkBuildHash(errData);
-          response = await extensionSDK.serverProxy('http://localhost:8081', {
+          response = await extensionSDK.serverProxy(BACKEND_URL, {
             method: 'POST',
             headers,
             body: JSON.stringify(payload)
@@ -122,7 +123,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
         'X-Nano-Admin-Challenge': extensionSDK.createSecretKeyTag('nano_admin_challenge')
       };
 
-      let response = await extensionSDK.serverProxy('http://localhost:8081', {
+      let response = await extensionSDK.serverProxy(BACKEND_URL, {
         method: 'POST',
         headers,
         body: JSON.stringify(payload)
@@ -132,7 +133,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
         addLog('Challenge required or expired. Retrying action request...');
         const errData = response.body;
         checkBuildHash(errData);
-        response = await extensionSDK.serverProxy('http://localhost:8081', {
+        response = await extensionSDK.serverProxy(BACKEND_URL, {
           method: 'POST',
           headers,
           body: JSON.stringify(payload)
