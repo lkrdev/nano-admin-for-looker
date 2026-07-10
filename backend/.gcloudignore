@@ -1,0 +1,15 @@
+# .gcloudignore for Looker Admin Extension Backend
+
+# Ignore node_modules
+node_modules/
+
+# Ignore local typescript compile output (GCP will build from source)
+dist/
+
+# Ignore local credentials and settings
+.env
+.env.*
+looker.ini
+
+# Ignore logs
+*.log

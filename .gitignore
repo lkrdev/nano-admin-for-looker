@@ -12,3 +12,8 @@ looker.ini
 /extension/dist/
 /backend/dist/
 deploy-config.json
+
+# Copied workflow templates (managed by generate-hash.js)
+backend/src/workflow-templates/
+extension/src/workflow-templates/
+

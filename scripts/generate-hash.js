@@ -21,7 +21,69 @@ function walk(dir) {
   return results;
 }
 
+function syncWorkflowTemplates() {
+  const srcTemplatesDir = path.resolve(__dirname, '..', 'workflow-templates');
+  const destBackendDir = path.resolve(__dirname, '..', 'backend', 'src', 'workflow-templates');
+  const destExtensionDir = path.resolve(__dirname, '..', 'extension', 'src', 'workflow-templates');
+
+  console.log('🔄 Syncing workflow templates to backend and extension src folders...');
+
+  // Clean old target folders
+  if (fs.existsSync(destBackendDir)) {
+    fs.rmSync(destBackendDir, { recursive: true, force: true });
+  }
+  if (fs.existsSync(destExtensionDir)) {
+    fs.rmSync(destExtensionDir, { recursive: true, force: true });
+  }
+
+  if (!fs.existsSync(srcTemplatesDir)) {
+    console.log('⚠️ No source workflow-templates folder found. Skipping sync.');
+    return;
+  }
+
+  const templates = fs.readdirSync(srcTemplatesDir);
+  templates.forEach(templateId => {
+    const templatePath = path.join(srcTemplatesDir, templateId);
+    if (!fs.statSync(templatePath).isDirectory()) return;
+
+    // Check frontend
+    const frontendSrc = path.join(templatePath, 'frontend');
+    if (fs.existsSync(frontendSrc) && fs.statSync(frontendSrc).isDirectory()) {
+      const frontendDest = path.join(destExtensionDir, templateId, 'frontend');
+      fs.mkdirSync(path.dirname(frontendDest), { recursive: true });
+      fs.cpSync(frontendSrc, frontendDest, { recursive: true });
+      console.log(`  [extension] Synced frontend component for template "${templateId}"`);
+    }
+
+    // Check backend
+    const backendSrc = path.join(templatePath, 'backend');
+    if (fs.existsSync(backendSrc) && fs.statSync(backendSrc).isDirectory()) {
+      const backendDest = path.join(destBackendDir, templateId, 'backend');
+      fs.mkdirSync(path.dirname(backendDest), { recursive: true });
+      fs.cpSync(backendSrc, backendDest, { recursive: true });
+      console.log(`  [backend] Synced backend handler for template "${templateId}"`);
+    }
+
+    // Check manifest.json
+    const manifestSrc = path.join(templatePath, 'manifest.json');
+    if (fs.existsSync(manifestSrc) && fs.statSync(manifestSrc).isFile()) {
+      const extManifestDest = path.join(destExtensionDir, templateId, 'manifest.json');
+      const beManifestDest = path.join(destBackendDir, templateId, 'manifest.json');
+      
+      fs.mkdirSync(path.dirname(extManifestDest), { recursive: true });
+      fs.copyFileSync(manifestSrc, extManifestDest);
+      
+      fs.mkdirSync(path.dirname(beManifestDest), { recursive: true });
+      fs.copyFileSync(manifestSrc, beManifestDest);
+      console.log(`  [shared] Synced manifest.json for template "${templateId}"`);
+    }
+  });
+}
+
 function generateHash() {
+  // Sync the workflow templates first!
+  syncWorkflowTemplates();
+
   const backendSrc = path.join(__dirname, '..', 'backend', 'src');
   const extensionSrc = path.join(__dirname, '..', 'extension', 'src');
 
@@ -60,3 +122,4 @@ export const BUILD_HASH = '${hash}';
 }
 
 generateHash();
+

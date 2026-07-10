@@ -1,9 +1,39 @@
-adminPages:
-  - route: "/user-audit"
-    label: "User Audit Dashboard"
+workflows:
+  - id: "hr-disable-users"
+    label: "HR Disable Users"
+    template: "crud"
+    route: "/hr-disable-users"
     authorized_groups:
       - "3"
-  - route: "/cache-purge"
-    label: "Cache Purge Utility"
+    parameters:
+      target_object: "users"
+      supported_operations:
+        - name: "list"
+          fields:
+            - "id"
+            - "name"
+            - "email"
+        - name: "update"
+          fields:
+            - "is_disabled"
+          values:
+            is_disabled: true
+
+  - id: "create-new-connections"
+    label: "Create New Connections"
+    template: "crud"
+    route: "/create-connections"
     authorized_groups:
-      - "5"
+      - "developer-group-id"
+    parameters:
+      target_object: "connections"
+      supported_operations:
+        - name: "read"
+          fields:
+            - "name"
+        - name: "list"
+          fields:
+            - "name"
+        - name: "create"
+          fields:
+            - "*"

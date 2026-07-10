@@ -8,6 +8,69 @@ interface AppProps {
   extensionSDK: any;
 }
 
+class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { hasError: boolean; error: any }> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+  static getDerivedStateFromError(error: any) {
+    return { hasError: true, error };
+  }
+  componentDidCatch(error: any, errorInfo: any) {
+    console.error("ErrorBoundary caught an error", error, errorInfo);
+  }
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div style={{ padding: '16px', color: '#ea4335' }}>
+          <strong>⚠️ Failed to load workflow UI:</strong>
+          <p style={{ fontSize: '13px', margin: '4px 0 0 0' }}>{this.state.error?.message || String(this.state.error)}</p>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+interface WorkflowLoaderProps {
+  workflow: any;
+  coreSDK: any;
+  extensionSDK: any;
+  addLog: (msg: string) => void;
+  callWorkflowBackend: (workflowId: string, action: string, payload?: any) => Promise<any>;
+}
+
+const WorkflowLoader: React.FC<WorkflowLoaderProps> = ({
+  workflow,
+  coreSDK,
+  extensionSDK,
+  addLog,
+  callWorkflowBackend
+}) => {
+  const LazyComponent = React.useMemo(() => {
+    const template = workflow.template;
+    return React.lazy(() => import(`./workflow-templates/${template}/frontend`) as any);
+  }, [workflow.template]);
+
+  const handleCallBackend = (action: string, payload?: any) => {
+    return callWorkflowBackend(workflow.id, action, payload);
+  };
+
+  return (
+    <React.Suspense fallback={<div>Loading workflow interface...</div>}>
+      <LazyComponent
+        workflowId={workflow.id}
+        label={workflow.label}
+        parameters={workflow.parameters || {}}
+        coreSDK={coreSDK}
+        extensionSDK={extensionSDK}
+        addLog={addLog}
+        callBackend={handleCallBackend}
+      />
+    </React.Suspense>
+  );
+};
+
 export const App: React.FC<AppProps> = ({ extensionSDK }) => {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -15,6 +78,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
   const [gcfStatus, setGcfStatus] = useState<'idle' | 'checking' | 'connected' | 'error'>('idle');
   const [gcfResponse, setGcfResponse] = useState<string>('');
   const [adminPages, setAdminPages] = useState<any[]>([]);
+  const [workflows, setWorkflows] = useState<any[]>([]);
   const [hashMismatch, setHashMismatch] = useState<boolean>(false);
   const [backendHash, setBackendHash] = useState<string>('');
 
@@ -54,16 +118,12 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
       setGcfStatus('checking');
       try {
         const payload = {
-          action: 'get_admin_pages',
-          user: userId ? {
-            id: userId,
-            email: meInfo?.email,
-            name: meInfo?.display_name
-          } : undefined
+          action: 'get_admin_pages'
         };
         const headers = {
           'Content-Type': 'application/json',
-          'X-Nano-Admin-Challenge': extensionSDK.createSecretKeyTag('nano_admin_challenge')
+          'Authorization': `looker-attribute-challenge ${extensionSDK.createSecretKeyTag('nano_admin_challenge')}`,
+          'X-Looker-User-ID': extensionSDK.createSecretKeyTag('id')
         };
         
         let response = await extensionSDK.serverProxy(BACKEND_URL, {
@@ -93,7 +153,10 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
         if (data.pages) {
           setAdminPages(data.pages);
         }
-        addLog(`Backend responded successfully: Loaded ${data.pages?.length || 0} admin pages.`);
+        if (data.workflows) {
+          setWorkflows(data.workflows);
+        }
+        addLog(`Backend responded successfully: Loaded ${data.pages?.length || 0} admin pages and ${data.workflows?.length || 0} workflows.`);
       } catch (error) {
         console.error(error);
         setGcfStatus('error');
@@ -111,16 +174,12 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
     setGcfStatus('checking');
     try {
       const payload = {
-        action,
-        user: {
-          id: currentUser?.id,
-          email: currentUser?.email,
-          name: currentUser?.display_name
-        }
+        action
       };
       const headers = {
         'Content-Type': 'application/json',
-        'X-Nano-Admin-Challenge': extensionSDK.createSecretKeyTag('nano_admin_challenge')
+        'Authorization': `looker-attribute-challenge ${extensionSDK.createSecretKeyTag('nano_admin_challenge')}`,
+        'X-Looker-User-ID': extensionSDK.createSecretKeyTag('id')
       };
 
       let response = await extensionSDK.serverProxy(BACKEND_URL, {
@@ -157,6 +216,61 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
       console.error(error);
       setGcfStatus('error');
       addLog(`Backend connection failed: ${String(error)}`);
+    }
+  };
+
+  const callWorkflowBackend = async (workflowId: string, workflowAction: string, payload?: any) => {
+    addLog(`Initiating backend call for workflow '${workflowId}' action '${workflowAction}'...`);
+    setGcfStatus('checking');
+    try {
+      const requestPayload = {
+        action: 'execute_workflow',
+        workflowId,
+        workflowAction,
+        payload
+      };
+      const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `looker-attribute-challenge ${extensionSDK.createSecretKeyTag('nano_admin_challenge')}`,
+        'X-Looker-User-ID': extensionSDK.createSecretKeyTag('id')
+      };
+
+      let response = await extensionSDK.serverProxy(BACKEND_URL, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestPayload)
+      });
+
+      if (response.status === 401) {
+        addLog('Challenge required or expired. Retrying workflow execution...');
+        const errData = response.body;
+        checkBuildHash(errData);
+        response = await extensionSDK.serverProxy(BACKEND_URL, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(requestPayload)
+        });
+      }
+
+      if (!response.ok) {
+        if (response.status === 403) {
+          const errData = response.body;
+          throw new Error(errData.error || 'Forbidden');
+        }
+        throw new Error(`HTTP Error: ${response.status}`);
+      }
+
+      const data = response.body;
+      setGcfStatus('connected');
+      checkBuildHash(data);
+      setGcfResponse(JSON.stringify(data, null, 2));
+      addLog(`Backend responded successfully for workflow: ${data.message || 'Success'}`);
+      return data.result;
+    } catch (error) {
+      console.error(error);
+      setGcfStatus('error');
+      addLog(`Backend connection failed: ${String(error)}`);
+      throw error;
     }
   };
 
@@ -243,12 +357,48 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
           </div>
         </section>
 
-        {/* Dynamic Admin Pages from YAML config */}
+        {/* Dynamic Workflows from YAML config */}
+        {workflows.map((workflow, idx) => {
+          const isAuthorized = workflow.authorized !== false;
+          return (
+            <section
+              key={`wf-${idx}`}
+              className={`card ${!isAuthorized ? 'card-disabled' : ''}`}
+              style={!isAuthorized ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                <h3 style={{ margin: 0 }}>{workflow.label}</h3>
+                {isAuthorized ? (
+                  <span className="badge badge-success" style={{ fontSize: '10px' }}>Authorized</span>
+                ) : (
+                  <span className="badge badge-error" style={{ fontSize: '10px' }}>Access Denied</span>
+                )}
+              </div>
+              {isAuthorized ? (
+                <ErrorBoundary>
+                  <WorkflowLoader
+                    workflow={workflow}
+                    coreSDK={coreSDK}
+                    extensionSDK={extensionSDK}
+                    addLog={addLog}
+                    callWorkflowBackend={callWorkflowBackend}
+                  />
+                </ErrorBoundary>
+              ) : (
+                <p className="card-description" style={{ color: 'var(--text-muted)' }}>
+                  You do not have authorization to view or execute this workflow.
+                </p>
+              )}
+            </section>
+          );
+        })}
+
+        {/* Dynamic Admin Pages from YAML config (Legacy support) */}
         {adminPages.map((page, idx) => {
           const isAuthorized = page.authorized !== false;
           return (
             <section
-              key={idx}
+              key={`p-${idx}`}
               className={`card ${!isAuthorized ? 'card-disabled' : ''}`}
               style={!isAuthorized ? { opacity: 0.6, cursor: 'not-allowed' } : undefined}
             >
@@ -295,11 +445,11 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
           );
         })}
 
-        {adminPages.length === 0 && (
+        {adminPages.length === 0 && workflows.length === 0 && (
           <section className="card" style={{ gridColumn: 'span 2' }}>
-            <h3>No Admin Pages Loaded</h3>
+            <h3>No Admin Pages or Workflows Loaded</h3>
             <p className="card-description">
-              Could not retrieve dynamic admin pages from <code>index.md</code> in the <code>nano_admin</code> project. Falling back to default tools or waiting for backend connection...
+              Could not retrieve dynamic configuration from <code>index.md</code> in the <code>nano_admin</code> project. Falling back to default tools or waiting for backend connection...
             </p>
           </section>
         )}

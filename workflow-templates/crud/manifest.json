@@ -1,0 +1,33 @@
+{
+  "name": "CRUD Workflow Template",
+  "description": "A reusable CRUD workflow template that can list, read, create, and update Looker objects.",
+  "version": "1.0.0",
+  "parameters": {
+    "target_object": {
+      "type": "string",
+      "description": "The Looker API object type (e.g. 'users', 'connections')",
+      "required": true
+    },
+    "supported_operations": {
+      "type": "array",
+      "description": "List of operations supported by this instantiation",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "values": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  }
+}

@@ -2,6 +2,17 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { connectExtensionHost } from '@looker/extension-sdk';
 import { App } from './App';
+import { PUBLIC_PATH } from './config';
+
+// Declare Webpack dynamic public path variable
+declare global {
+  let __webpack_public_path__: string;
+}
+
+// Override publicPath at runtime for loading lazy chunks
+if (typeof PUBLIC_PATH !== 'undefined' && PUBLIC_PATH) {
+  __webpack_public_path__ = PUBLIC_PATH;
+}
 
 // Create a container element dynamically since Looker runs the bundle in an empty iframe body
 const container = document.createElement('div');

@@ -14,7 +14,9 @@
     "@google-cloud/functions-framework": "^3.1.2",
     "@looker/sdk": "^23.0.0",
     "@looker/sdk-node": "^23.0.0",
-    "cors": "^2.8.5"
+    "@types/js-yaml": "^4.0.9",
+    "cors": "^2.8.5",
+    "js-yaml": "^5.2.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.12",
