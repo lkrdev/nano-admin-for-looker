@@ -35,14 +35,25 @@ export function generateChallengeToken(userId: string): string {
 }
 
 export function verifyChallengeToken(userId: string, token: string): ChallengeVerificationResult {
-  if (!token) return 'missing';
+  if (!token) {
+    console.log(`[DEBUG] verifyChallengeToken: Token is missing for user ${userId}`);
+    return 'missing';
+  }
+
+  console.log(`[DEBUG] verifyChallengeToken: Received token for user ${userId}. SHA256: ${hashForLog(token)}`);
 
   try {
     const parts = token.split('|');
-    if (parts.length !== 4) return 'invalid';
+    if (parts.length !== 4) {
+      console.log(`[DEBUG] verifyChallengeToken: Invalid token format (split parts: ${parts.length})`);
+      return 'invalid';
+    }
     const [tokenUserId, tokenTimestampStr, random, signature] = parts;
 
-    if (tokenUserId !== userId) return 'invalid';
+    if (tokenUserId !== userId) {
+      console.log(`[DEBUG] verifyChallengeToken: User ID mismatch. Expected: ${userId}, Token: ${tokenUserId}`);
+      return 'invalid';
+    }
 
     // Verify signature
     const payload = `${tokenUserId}|${tokenTimestampStr}|${random}`;
@@ -109,14 +120,20 @@ export async function getChallengeAttributeId(sdk: any): Promise<string | null> 
 
 export async function refreshChallenge(sdk: any, userId: string): Promise<string> {
   const newChallenge = generateChallengeToken(userId);
+  console.log(`[DEBUG] refreshChallenge: Generated new challenge for user ${userId}. SHA256: ${hashForLog(newChallenge)}`);
   if (sdk) {
     const attrId = await getChallengeAttributeId(sdk);
     if (attrId) {
-      console.log(`Setting nano_admin_challenge for user ${userId}.`);
+      console.log(`[DEBUG] refreshChallenge: Setting nano_admin_challenge attribute (ID: ${attrId}) for user ${userId}.`);
       await sdk.ok(sdk.set_user_attribute_user_value(userId, attrId, { value: newChallenge }));
     } else {
       console.error('nano_admin_challenge user attribute ID not found on Looker instance.');
     }
   }
   return newChallenge;
+}
+
+function hashForLog(value: string): string {
+  if (!value) return 'none';
+  return crypto.createHash('sha256').update(value).digest('hex').substring(0, 16) + '...';
 }

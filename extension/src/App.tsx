@@ -75,7 +75,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [logs, setLogs] = useState<string[]>([]);
-  const [gcfStatus, setGcfStatus] = useState<'idle' | 'checking' | 'connected' | 'error'>('idle');
+  const [gcfStatus, setGcfStatus] = useState<'idle' | 'checking' | 'connected' | 'offline' | 'auth_error' | 'other_error' | 'error'>('idle');
   const [gcfResponse, setGcfResponse] = useState<string>('');
   const [adminPages, setAdminPages] = useState<any[]>([]);
   const [workflows, setWorkflows] = useState<any[]>([]);
@@ -144,7 +144,9 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
         }
 
         if (!response.ok) {
-          throw new Error(`HTTP Error: ${response.status}`);
+          const err = new Error(`HTTP Error: ${response.status}`);
+          (err as any).status = response.status;
+          throw err;
         }
 
         const data = response.body;
@@ -157,9 +159,15 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
           setWorkflows(data.workflows);
         }
         addLog(`Backend responded successfully: Loaded ${data.pages?.length || 0} admin pages and ${data.workflows?.length || 0} workflows.`);
-      } catch (error) {
+      } catch (error: any) {
         console.error(error);
-        setGcfStatus('error');
+        if (error.status === 401) {
+          setGcfStatus('auth_error');
+        } else if (error.status) {
+          setGcfStatus('other_error');
+        } else {
+          setGcfStatus('offline');
+        }
         addLog(`Backend connection failed: ${String(error)}`);
       } finally {
         setLoading(false);
@@ -202,9 +210,13 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
       if (!response.ok) {
         if (response.status === 403) {
           const errData = response.body;
-          throw new Error(errData.error || 'Forbidden');
+          const err = new Error(errData.error || 'Forbidden');
+          (err as any).status = 403;
+          throw err;
         }
-        throw new Error(`HTTP Error: ${response.status}`);
+        const err = new Error(`HTTP Error: ${response.status}`);
+        (err as any).status = response.status;
+        throw err;
       }
 
       const data = response.body;
@@ -212,9 +224,15 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
       checkBuildHash(data);
       setGcfResponse(JSON.stringify(data, null, 2));
       addLog(`Backend responded successfully: ${data.message || 'Success'}`);
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      setGcfStatus('error');
+      if (error.status === 401) {
+        setGcfStatus('auth_error');
+      } else if (error.status) {
+        setGcfStatus('other_error');
+      } else {
+        setGcfStatus('offline');
+      }
       addLog(`Backend connection failed: ${String(error)}`);
     }
   };
@@ -255,9 +273,13 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
       if (!response.ok) {
         if (response.status === 403) {
           const errData = response.body;
-          throw new Error(errData.error || 'Forbidden');
+          const err = new Error(errData.error || 'Forbidden');
+          (err as any).status = 403;
+          throw err;
         }
-        throw new Error(`HTTP Error: ${response.status}`);
+        const err = new Error(`HTTP Error: ${response.status}`);
+        (err as any).status = response.status;
+        throw err;
       }
 
       const data = response.body;
@@ -266,9 +288,15 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
       setGcfResponse(JSON.stringify(data, null, 2));
       addLog(`Backend responded successfully for workflow: ${data.message || 'Success'}`);
       return data.result;
-    } catch (error) {
+    } catch (error: any) {
       console.error(error);
-      setGcfStatus('error');
+      if (error.status === 401) {
+        setGcfStatus('auth_error');
+      } else if (error.status) {
+        setGcfStatus('other_error');
+      } else {
+        setGcfStatus('offline');
+      }
       addLog(`Backend connection failed: ${String(error)}`);
       throw error;
     }
@@ -353,6 +381,9 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
             {gcfStatus === 'idle' && <span className="badge badge-neutral">Idle</span>}
             {gcfStatus === 'checking' && <span className="badge badge-neutral pulse">Checking...</span>}
             {gcfStatus === 'connected' && <span className="badge badge-success">Online</span>}
+            {gcfStatus === 'offline' && <span className="badge badge-error">Offline</span>}
+            {gcfStatus === 'auth_error' && <span className="badge badge-error">Auth Error</span>}
+            {gcfStatus === 'other_error' && <span className="badge badge-error">Error</span>}
             {gcfStatus === 'error' && <span className="badge badge-error">Offline / Error</span>}
           </div>
         </section>

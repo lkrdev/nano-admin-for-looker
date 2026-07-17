@@ -9,7 +9,8 @@ application: admin_extension {
     use_form_submit: yes
     local_storage: yes
     core_api_methods: ["me", "all_users", "user_roles"]
-    scoped_user_attributes: ["nano_admin_challenge", "id"]
+    scoped_user_attributes: ["nano_admin_challenge"]
+    global_user_attributes: ["id"]
     
     external_api_urls: [
       "http://localhost:8081",

@@ -1,4 +1,5 @@
 const path = require('path');
+const webpack = require('webpack');
 
 module.exports = (env, argv) => {
   const isProduction = argv.mode === 'production';
@@ -44,6 +45,12 @@ module.exports = (env, argv) => {
       liveReload: false,
       client: false
     },
+    plugins: [
+      new webpack.DefinePlugin({
+        'process.env.BACKEND_URL': JSON.stringify(process.env.BACKEND_URL || ''),
+        'process.env.PUBLIC_PATH': JSON.stringify(process.env.PUBLIC_PATH || '')
+      })
+    ],
     devtool: isProduction ? 'source-map' : 'eval-source-map'
   };
 };
