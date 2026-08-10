@@ -1,8 +1,9 @@
 workflows:
   - id: "hr-disable-users"
     label: "HR Disable Users"
+    description: "Manage employee account statuses and compliance disabling."
     template: "crud"
-    route: "/hr-disable-users"
+    mount_type: "page"
     authorized_groups:
       - "3"
     parameters:
@@ -21,8 +22,9 @@ workflows:
 
   - id: "create-new-connections"
     label: "Create New Connections"
+    description: "Provision and inspect database connection configurations."
     template: "crud"
-    route: "/create-connections"
+    mount_type: "page"
     authorized_groups:
       - "developer-group-id"
     parameters:
@@ -37,3 +39,13 @@ workflows:
         - name: "create"
           fields:
             - "*"
+
+  - id: "kill-long-running-queries"
+    label: "Terminate Long-Running Queries"
+    description: "Scan active Looker queries and terminate runs exceeding 10 minutes."
+    template: "kill-queries"
+    mount_type: "card"
+    authorized_groups:
+      - "1"
+    parameters:
+      min_runtime_seconds: 600

@@ -10,6 +10,7 @@ const corsHandler = cors({
   origin: true, // Allow all origins for dev, or configure specifically in production
   methods: ['POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Nano-Admin-Challenge', 'X-Looker-User-ID'],
+  //TODO ^ check whether `X-Nano-Admin-Challenge` still in use? I think we maybe replaced it with the standard Authorization header instead?
   credentials: true
 });
 
@@ -17,10 +18,9 @@ const corsHandler = cors({
 let sdk: any = null;
 try {
   sdk = LookerNodeSDK.init40();
-  console.log('Looker Node SDK initialized successfully.');
 } catch (e) {
   console.error('Fatal: Looker Node SDK failed to initialize.', e);
-  process.exit(1); // Since mock logic is removed, SDK initialization failure is fatal.
+  process.exit(1);
 }
 
 ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
@@ -39,23 +39,8 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
     // 1. Perform Authentication
     const { userId, status } = authenticateRequest(req);
 
-    if (status === 'invalid') {
-      console.warn(`🚨 Security warning: Invalid challenge signature detected for user: ${userId}`);
-      res.status(401).json({
-        error: 'invalid_challenge',
-        message: 'The provided authentication challenge signature is invalid.'
-      });
-      return;
-    }
-
-    if (status === 'missing' || status === 'expired') {
-      const rateLimitKey = userId || req.ip || String(req.headers['x-forwarded-for']) || 'global';
-      const allowed = checkRateLimit(rateLimitKey);
-      if (!allowed) {
-        console.warn(`Rate limit exceeded for client: ${rateLimitKey}`);
-        res.status(429).json({ error: 'too_many_requests', message: 'Rate limit exceeded. Please try again later.' });
-        return;
-      }
+    if (status !== 'valid') {
+      console.warn(`[DEBUG] Authentication failed for user "${userId}" (Status: ${status}). Resetting/refreshing challenge...`);
 
       if (!userId) {
         res.status(401).json({
@@ -65,10 +50,21 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
         return;
       }
 
+      const rateLimitKey = userId || req.ip || String(req.headers['x-forwarded-for']) || 'global';
+      const allowed = checkRateLimit(rateLimitKey);
+      if (!allowed) {
+        console.warn(`Rate limit exceeded for client: ${rateLimitKey}`);
+        res.status(429).json({ error: 'too_many_requests', message: 'Rate limit exceeded. Please try again later.' });
+        return;
+      }
+
       try {
         await refreshChallenge(sdk, userId);
-        console.log(`Challenge expired/missing for user ${userId}. Refreshed challenge and redirecting (307)...`);
-        res.redirect(307, req.originalUrl || req.url);
+        console.log(`[DEBUG] Successfully refreshed challenge in Looker for user ${userId}. Returning 401 to trigger client retry.`);
+        res.status(401).json({
+          error: 'challenge_required',
+          message: 'Authentication challenge is missing, expired, or invalid. A new challenge has been provisioned.'
+        });
       } catch (err) {
         console.error(`Failed to refresh challenge for user ${userId}:`, err);
         res.status(500).json({ error: 'Internal Server Error', details: 'Could not generate authentication challenge' });

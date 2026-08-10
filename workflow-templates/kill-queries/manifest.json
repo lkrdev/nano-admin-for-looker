@@ -1,0 +1,13 @@
+{
+  "name": "Kill Long-Running Queries",
+  "description": "Scans and terminates running Looker queries exceeding a specified runtime threshold.",
+  "version": "1.0.0",
+  "mount_type": "card",
+  "parameters": {
+    "min_runtime_seconds": {
+      "type": "number",
+      "description": "Threshold in seconds to qualify a query as long-running (default: 600)",
+      "default": 600
+    }
+  }
+}

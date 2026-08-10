@@ -2,6 +2,7 @@
   "name": "CRUD Workflow Template",
   "description": "A reusable CRUD workflow template that can list, read, create, and update Looker objects.",
   "version": "1.0.0",
+  "mount_type": "page",
   "parameters": {
     "target_object": {
       "type": "string",

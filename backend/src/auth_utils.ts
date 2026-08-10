@@ -1,6 +1,8 @@
 import yaml from 'js-yaml';
+import * as https from 'https';
+import { URL } from 'url';
 
-let cachedPages: any = null;
+let cachedWorkflows: any = null;
 let cacheExpiration = 0;
 
 export function parseYaml(yamlStr: string): any {
@@ -12,28 +14,34 @@ export function parseYaml(yamlStr: string): any {
   }
 }
 
-export async function getAdminPages(sdk: any): Promise<any> {
+export async function getWorkflows(sdk: any): Promise<any> {
   const cacheDurationMs = parseInt(process.env.ADMIN_PAGES_CACHE_DURATION_MS || '0', 10);
   const now = Date.now();
 
-  if (cachedPages && now < cacheExpiration) {
-    return cachedPages;
+  if (cachedWorkflows && now < cacheExpiration) {
+    return cachedWorkflows;
   }
 
   console.log('Fetching index.md from project nano_admin...');
-  const fileObj = await sdk.ok(sdk.project_file('nano_admin', 'index.md', 'id,path,title,type,text'));
-  if (!fileObj || !fileObj.text) {
-    throw new Error('File index.md returned but text content was empty');
+  const baseUrl = sdk.authSession.settings.base_url;
+  const authProps = await sdk.authSession.authenticate({ headers: {} });
+  const authHeaders = authProps.headers;
+
+  try {
+    const url = `${baseUrl}/api/4.0/projects/nano_admin/file/content?file_path=index.md`;
+    const text = await fetchRawText(url, authHeaders);
+    const parsed = parseYaml(text) || {};
+    parsed.indexFileLoaded = true;
+    cachedWorkflows = parsed;
+    cacheExpiration = now + cacheDurationMs;
+    return parsed;
+  } catch (err: any) {
+    console.warn('Failed to load index.md from project nano_admin:', err.message || err);
+    const fallback = { workflows: [], indexFileLoaded: false };
+    cachedWorkflows = fallback;
+    cacheExpiration = now + cacheDurationMs;
+    return fallback;
   }
-
-  const parsed = parseYaml(fileObj.text);
-  cachedPages = parsed;
-  cacheExpiration = now + cacheDurationMs;
-  return parsed;
-}
-
-export async function getWorkflows(sdk: any): Promise<any> {
-  return getAdminPages(sdk);
 }
 
 export async function getUserGroups(sdk: any, userId: string): Promise<string[]> {
@@ -44,14 +52,43 @@ export async function getUserGroups(sdk: any, userId: string): Promise<string[]>
 
 export async function isUserAuthorized(sdk: any, userId: string, identifier: string): Promise<boolean> {
   const configData = await getWorkflows(sdk);
-  // Support both new workflows (by ID or route) and legacy admin pages
-  const workflow = (configData.workflows || []).find((w: any) => w.id === identifier || w.route === identifier);
-  const page = (configData.adminPages || []).find((p: any) => p.route === identifier);
-  const item = workflow || page;
+  const cleanId = identifier.replace(/^\//, '');
+  const workflow = (configData.workflows || []).find((w: any) => w.id === identifier || w.id === cleanId);
 
-  if (!item) return false;
-  if (!item.authorized_groups || item.authorized_groups.length === 0) return true;
+  if (!workflow) return false;
+  if (!workflow.authorized_groups || workflow.authorized_groups.length === 0) return true;
 
   const userGroups = await getUserGroups(sdk, userId);
-  return item.authorized_groups.some((groupId: string) => userGroups.includes(groupId));
+  return workflow.authorized_groups.some((groupId: string) => userGroups.includes(groupId));
+}
+
+function fetchRawText(urlStr: string, headers: any): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlStr);
+    const options = {
+      method: 'GET',
+      headers: headers,
+      rejectUnauthorized: false
+    };
+
+    const req = https.request(url, options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => {
+        data += chunk;
+      });
+      res.on('end', () => {
+        if (res.statusCode && res.statusCode >= 400) {
+          reject(new Error(`HTTP Error ${res.statusCode}: ${data}`));
+        } else {
+          resolve(data);
+        }
+      });
+    });
+
+    req.on('error', (err) => {
+      reject(err);
+    });
+
+    req.end();
+  });
 }

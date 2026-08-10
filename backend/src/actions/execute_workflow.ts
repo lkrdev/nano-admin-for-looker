@@ -1,5 +1,6 @@
 import { getWorkflows, isUserAuthorized } from '../auth_utils';
 import { ActionHandler } from './registry';
+import { BUILD_HASH, BUILD_TIMESTAMP } from '../build_hash';
 
 export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody) => {
   const { workflowId, workflowAction, payload } = reqBody;
@@ -66,7 +67,9 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
     return {
       message: `Workflow "${workflowId}" executed successfully`,
       timestamp: new Date().toISOString(),
-      result
+      result,
+      build_hash: BUILD_HASH,
+      build_timestamp: BUILD_TIMESTAMP
     };
   } catch (error: any) {
     console.error(`Error in workflow template "${templateId}" handler:`, error);
