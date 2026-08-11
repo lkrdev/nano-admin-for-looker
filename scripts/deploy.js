@@ -96,8 +96,8 @@ async function runFullDeploymentPipeline() {
 
   logDeployStep('Operations Started');
 
-  const gcfUrl = await deployGCF(mergedConfig, lookerCreds);
-  logDeployStep('GCF Deployed', { gcfUrl });
+  const { gcfUrl, secretManagerError } = await deployGCF(mergedConfig, lookerCreds);
+  logDeployStep('GCF Deployed', { gcfUrl, secretManagerError });
 
   const publicUrl = `https://storage.googleapis.com/${mergedConfig.gcs_bucket_name}/`;
   const manifestContent = updateLocalConfigs(gcfUrl, publicUrl);
@@ -113,6 +113,9 @@ async function runFullDeploymentPipeline() {
   logDeployStep('Post-Deployment Verification Completed', verificationResult);
 
   printDeploymentSuccess(mergedConfig, manifestContent, gcfUrl, verificationResult?.manifestPass);
+  if (secretManagerError) {
+    reportSecretManagerWarning(secretManagerError);
+  }
   logDeployStep('Deployment Completed Successfully', { gcfUrl, publicUrl });
 }
 
@@ -179,4 +182,11 @@ function handleDeploymentFailure(err) {
   console.error('\n💥 Deployment failed:', err);
   logDeployStep('Deployment Failed', { message: err.message, stack: err.stack });
   process.exit(1);
+}
+
+function reportSecretManagerWarning(errorMessage) {
+  console.warn('\n⚠️  SECRET MANAGER NOTICE:');
+  console.warn(`    Automatic Secret Manager provisioning encountered an issue: ${errorMessage}`);
+  console.warn('    Note: Credentials were NOT uploaded to environment variables to preserve security.');
+  console.warn('    Please ensure LOOKERSDK_CLIENT_ID, LOOKERSDK_CLIENT_SECRET, and GCF_HMAC_SECRET are manually created/configured in Secret Manager.');
 }

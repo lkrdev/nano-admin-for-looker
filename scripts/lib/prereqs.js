@@ -81,6 +81,17 @@ async function checkGCPAuth() {
   }
 }
 
+function installDependencies() {
+  console.log('\n📦 Installing project dependencies via npm install...');
+  try {
+    execSync('npm install', { stdio: 'inherit' });
+    console.log('✅ Dependencies installed successfully.');
+  } catch (e) {
+    console.error('❌ Error: Failed to install project dependencies:', e.message);
+    process.exit(1);
+  }
+}
+
 async function checkPrerequisites() {
   console.log('🔍 Checking prerequisites...');
 
@@ -111,6 +122,8 @@ async function checkPrerequisites() {
 
   await checkGCPAuth();
   console.log('✅ All prerequisites met (Node/NPM, gcloud CLI, looker-cli, GCP session).');
+  
+  installDependencies();
 }
 
 async function ensureLookerLoggedIn(connectionConfig) {
@@ -152,6 +165,7 @@ module.exports = {
   parseJsonFromStdout,
   runCommandFiltered,
   checkGCPAuth,
+  installDependencies,
   checkPrerequisites,
   ensureLookerLoggedIn
 };

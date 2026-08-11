@@ -25,40 +25,16 @@ npm run deploy
 
 The script will:
 * Check for all CLI prerequisites.
+* Install project dependencies (`npm install`).
 * Prompt you for Looker and GCP targets (saving them to `deploy-config.json` for reuse).
 * Log you into Looker interactively via OAuth PKCE flow (if not already logged in).
 * Provision new Looker API client credentials for your GCF backend.
-* Upload credentials securely to **Google Cloud Secret Manager** (falling back to environment variables if Secret Manager is not accessible).
+* Upload credentials securely to **Google Cloud Secret Manager**.
 * Build and deploy the GCF backend function to Google Cloud.
 * Automatically configure the Looker user attribute `nano_admin_admin_extension_nano_admin_challenge` with the correct domain whitelists.
 * Update local configuration paths and compile the production bundle.
 
 Once completed, follow the instructions printed at the end of the script to upload the compiled `extension/dist/bundle.js` and `extension/manifest.lkml` to your Looker project.
-
----
-
-## 💻 Local Development Setup
-
-To run both frontend and backend locally with automatic mockups and watch configuration:
-
-1. **Install root dependencies:**
-   ```bash
-   npm install
-   ```
-
-2. **Start the local dev environment:**
-   ```bash
-   npm run dev
-   ```
-   This runs:
-   * Webpack Dev Server serving the frontend over HTTPS at `https://localhost:8080/bundle.js`
-   * Functions Framework local backend running at `http://localhost:8081`
-
-3. **Self-signed Certificate Verification:**
-   Visit `https://localhost:8080/bundle.js` once in your browser to accept the self-signed SSL certificate so Looker's iframe can load it.
-
-4. **Authentication Fallback:**
-   If Looker credentials are not configured locally via `backend/looker.ini` or environment variables, the backend runs in **mockup mode**, using dummy data for fast interface testing.
 
 ---
 

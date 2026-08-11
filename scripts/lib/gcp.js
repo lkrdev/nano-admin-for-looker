@@ -181,17 +181,9 @@ async function deployGCF(config, lookerCreds) {
     console.warn('⚠️ Warning: Failed to automatically grant Cloud Build Builder permission. This may cause deployment warnings or failures.');
   }
 
-  let useSecretManager = true;
+  let secretManagerError = null;
+
   try {
-    execSync('gcloud secrets list --limit=1', { stdio: 'ignore' });
-  } catch (e) {
-    console.warn('⚠️ Warning: Secret Manager API is not enabled or you do not have permission. Falling back to environment variables.');
-    useSecretManager = false;
-  }
-
-  let deployCommand = '';
-
-  if (useSecretManager) {
     let hasHmac = false;
     try {
       execSync('gcloud secrets describe GCF_HMAC_SECRET', { stdio: 'ignore' });
@@ -240,41 +232,25 @@ async function deployGCF(config, lookerCreds) {
     } catch (e) {
       console.warn('⚠️ Warning: Failed to grant Secret Accessor permission automatically. Make sure the default compute service account has roles/secretmanager.secretAccessor role.');
     }
-
-    console.log('\n📦 Compiling backend TypeScript code...');
-    execSync('npm run backend:build', { stdio: 'inherit' });
-
-    console.log(`\n🚀 Deploying Cloud Function: ${config.gcf_name} to region ${config.gcp_region}...`);
-    deployCommand = `gcloud functions deploy ${config.gcf_name} \\
-      --gen2 \\
-      --runtime=nodejs24 \\
-      --region=${config.gcp_region} \\
-      --trigger-http \\
-      --allow-unauthenticated \\
-      --entry-point=nanoAdminBackend \\
-      --source=backend \\
-      --set-env-vars="LOOKERSDK_BASE_URL=https://${config.looker_host}:${config.looker_port},BUILD_HASH=${localBuildHash}" \\
-      --set-secrets="LOOKERSDK_CLIENT_ID=LOOKERSDK_CLIENT_ID:latest,LOOKERSDK_CLIENT_SECRET=LOOKERSDK_CLIENT_SECRET:latest,GCF_HMAC_SECRET=GCF_HMAC_SECRET:latest"`;
-  } else {
-    if (!lookerCreds) {
-      console.error('❌ Error: Looker credentials are required for environment variables fallback but were not provided/found.');
-      process.exit(1);
-    }
-    const hmacSecret = crypto.randomBytes(32).toString('hex');
-    console.log('\n📦 Compiling backend TypeScript code...');
-    execSync('npm run backend:build', { stdio: 'inherit' });
-
-    console.log(`\n🚀 Deploying Cloud Function (fallback env vars): ${config.gcf_name} to region ${config.gcp_region}...`);
-    deployCommand = `gcloud functions deploy ${config.gcf_name} \\
-      --gen2 \\
-      --runtime=nodejs24 \\
-      --region=${config.gcp_region} \\
-      --trigger-http \\
-      --allow-unauthenticated \\
-      --entry-point=nanoAdminBackend \\
-      --source=backend \\
-      --set-env-vars="LOOKERSDK_BASE_URL=https://${config.looker_host}:${config.looker_port},LOOKERSDK_CLIENT_ID=${lookerCreds.clientId},LOOKERSDK_CLIENT_SECRET=${lookerCreds.clientSecret},GCF_HMAC_SECRET=${hmacSecret},BUILD_HASH=${localBuildHash}"`;
+  } catch (smErr) {
+    secretManagerError = smErr.message;
+    console.warn(`⚠️ Warning: Secret Manager provisioning encountered an issue: ${smErr.message}`);
   }
+
+  console.log('\n📦 Compiling backend TypeScript code...');
+  execSync('npm run backend:build', { stdio: 'inherit' });
+
+  console.log(`\n🚀 Deploying Cloud Function: ${config.gcf_name} to region ${config.gcp_region}...`);
+  const deployCommand = `gcloud functions deploy ${config.gcf_name} \\
+    --gen2 \\
+    --runtime=nodejs24 \\
+    --region=${config.gcp_region} \\
+    --trigger-http \\
+    --allow-unauthenticated \\
+    --entry-point=nanoAdminBackend \\
+    --source=backend \\
+    --set-env-vars="LOOKERSDK_BASE_URL=https://${config.looker_host}:${config.looker_port},BUILD_HASH=${localBuildHash}" \\
+    --set-secrets="LOOKERSDK_CLIENT_ID=LOOKERSDK_CLIENT_ID:latest,LOOKERSDK_CLIENT_SECRET=LOOKERSDK_CLIENT_SECRET:latest,GCF_HMAC_SECRET=GCF_HMAC_SECRET:latest"`;
 
   console.log(`Running deploy command:\n${deployCommand}\n`);
   try {
@@ -300,7 +276,7 @@ async function deployGCF(config, lookerCreds) {
   }
 
   console.log(`\n✅ Cloud Function deployed successfully at: ${gcfUrl}`);
-  return gcfUrl;
+  return { gcfUrl, secretManagerError };
 }
 
 async function deployExtensionToGCS(config) {
