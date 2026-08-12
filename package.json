@@ -17,5 +17,11 @@
     "deploy": "node scripts/deploy.js",
     "validate": "node scripts/deploy.js --validate-only",
     "dev": "npm run generate-hash && (npm run dev --workspace=extension & npm run dev --workspace=backend)"
+  },
+  "overrides": {
+    "cloudevents": {
+      "uuid": "^11.1.1"
+    },
+    "uuid": "^11.1.1"
   }
 }

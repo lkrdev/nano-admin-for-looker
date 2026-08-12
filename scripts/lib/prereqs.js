@@ -85,6 +85,7 @@ function installDependencies() {
   console.log('\n📦 Installing project dependencies via npm install...');
   try {
     execSync('npm install', { stdio: 'inherit' });
+    execSync('npm install --no-workspaces --prefix backend', { stdio: 'inherit' });
     console.log('✅ Dependencies installed successfully.');
   } catch (e) {
     console.error('❌ Error: Failed to install project dependencies:', e.message);

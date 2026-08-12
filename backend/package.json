@@ -11,16 +11,19 @@
     "start": "functions-framework --target=nanoAdminBackend --port=8081"
   },
   "dependencies": {
-    "@google-cloud/functions-framework": "^3.1.2",
-    "@looker/sdk": "^23.0.0",
-    "@looker/sdk-node": "^23.0.0",
+    "@google-cloud/functions-framework": "^5.0.5",
+    "@looker/sdk": "^26.12.0",
+    "@looker/sdk-node": "^26.12.0",
     "@types/js-yaml": "^4.0.9",
     "cors": "^2.8.5",
     "js-yaml": "^5.2.1"
   },
   "devDependencies": {
-    "@types/cors": "^2.8.12",
-    "@types/node": "^18.11.9",
-    "typescript": "^4.9.4"
+    "@types/cors": "^2.8.17",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.2"
+  },
+  "overrides": {
+    "uuid": "^11.1.1"
   }
 }

@@ -104,7 +104,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
   const [backendTimestamp, setBackendTimestamp] = useState<string>('');
   const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
 
-  const coreSDK = React.useMemo(() => LookerExtensionSDK.create40Client(extensionSDK), [extensionSDK]);
+  const coreSDK = React.useMemo(() => LookerExtensionSDK.createClient(extensionSDK), [extensionSDK]);
 
   // Status Badge Logic
   const isGcfError = gcfStatus === 'offline' || gcfStatus === 'auth_error' || gcfStatus === 'other_error' || gcfStatus === 'error';
