@@ -34,6 +34,48 @@ async function checkUserAdminPermission(connectionConfig, userId) {
   }
 }
 
+async function getAdminRoleId(connectionConfig) {
+  try {
+    const rolesOutput = execSync(`looker-cli api role all_roles --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const roles = parseJsonFromStdout(rolesOutput);
+    const rolesList = Array.isArray(roles) ? roles : [];
+
+    const adminByName = rolesList.find(r => r.name === 'Admin');
+    if (adminByName) return adminByName.id;
+
+    const adminByPerm = rolesList.find(r => {
+      if (r.permission_set) {
+        if (r.permission_set.all_access === true) return true;
+        if (Array.isArray(r.permission_set.permissions) && r.permission_set.permissions.includes('administer')) return true;
+      }
+      return false;
+    });
+    if (adminByPerm) return adminByPerm.id;
+  } catch (err) {
+    console.warn(`⚠️ Warning: Failed to query Looker roles: ${err.message}`);
+  }
+  return null;
+}
+
+async function assignAdminRoleToUser(connectionConfig, userId) {
+  const adminRoleId = await getAdminRoleId(connectionConfig);
+  if (!adminRoleId) {
+    console.warn('⚠️ Could not find an Administrator role in Looker to automatically assign.');
+    return false;
+  }
+  try {
+    console.log(`Assigning Administrator role (ID: ${adminRoleId}) to service account ID ${userId}...`);
+    const payload = JSON.stringify([parseInt(adminRoleId, 10)]);
+    execSync(`echo '${payload}' | looker-cli api user set_user_roles ${userId} - --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    console.log(`✅ Successfully assigned Administrator role to service account ID ${userId}.`);
+    return true;
+  } catch (err) {
+    console.warn(`⚠️ Warning: Failed to assign Administrator role: ${err.message}`);
+    return false;
+  }
+}
+
+
 async function getLookerCredentials(connectionConfig, saConfig) {
   let clientId = '';
   let clientSecret = '';
@@ -83,6 +125,7 @@ async function getLookerCredentials(connectionConfig, saConfig) {
         const newSa = parseJsonFromStdout(createOutput);
         targetSaId = newSa.id;
         console.log(`✅ Successfully created Looker service account ID: ${targetSaId}`);
+        await assignAdminRoleToUser(connectionConfig, targetSaId);
       } catch (createErr) {
         console.error('❌ Failed to create Looker service account:', createErr.message);
         process.exit(1);
@@ -215,6 +258,8 @@ async function configureLookerAttribute(config, gcfUrl) {
 module.exports = {
   getLookerSaById,
   checkUserAdminPermission,
+  getAdminRoleId,
+  assignAdminRoleToUser,
   getLookerCredentials,
   updateLocalConfigs,
   configureLookerAttribute
