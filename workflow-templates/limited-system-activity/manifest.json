@@ -1,0 +1,58 @@
+{
+  "name": "Limited System Activity Template",
+  "description": "Exposes a restricted slice of Looker System Activity explores with enforced performance limits and user ID access constraints.",
+  "version": "1.0.0",
+  "mount_type": "page",
+  "parameters": {
+    "explores": {
+      "type": "array",
+      "description": "List of system__activity explores allowed for this workflow and their configurations",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the explore in system__activity (e.g. 'history', 'dashboard', 'user')"
+          },
+          "allow_csv_export": {
+            "type": "boolean",
+            "description": "Whether to allow exporting query results to CSV for this explore (default: false)"
+          },
+          "require_date_filter": {
+            "type": "boolean",
+            "description": "Performance preset requiring at least one date filter before running queries (default: false)"
+          },
+          "max_row_limit": {
+            "type": "number",
+            "description": "Performance preset enforcing a maximum row limit cap for queries"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    "user_id_limitation": {
+      "type": "object",
+      "description": "Limitation enforcing filtering queries by user ID",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Whether user ID limitation is active"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "own",
+            "tenant_groups"
+          ],
+          "description": "'own' filters to the current user's ID; 'tenant_groups' filters to user IDs in tenant groups where configured user attribute is 'yes'"
+        },
+        "attribute_name": {
+          "type": "string",
+          "description": "User attribute name set on groups for tenant group matching (default: 'tenant')"
+        }
+      }
+    }
+  }
+}

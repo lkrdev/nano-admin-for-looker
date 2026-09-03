@@ -98,11 +98,16 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
   const [gcfStatus, setGcfStatus] = useState<'idle' | 'checking' | 'connected' | 'offline' | 'auth_error' | 'other_error' | 'error'>('idle');
   const [workflows, setWorkflows] = useState<any[]>([]);
   const [indexFileLoaded, setIndexFileLoaded] = useState<boolean>(true);
+  const [indexParseError, setIndexParseError] = useState<string | null>(null);
   const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
   const [hashMismatch, setHashMismatch] = useState<boolean>(false);
   const [backendHash, setBackendHash] = useState<string>('');
   const [backendTimestamp, setBackendTimestamp] = useState<string>('');
   const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
+  const [wrenchDropdownOpen, setWrenchDropdownOpen] = useState<boolean>(false);
+  const [validatingDev, setValidatingDev] = useState<boolean>(false);
+  const [devValidationResult, setDevValidationResult] = useState<any | null>(null);
+  const [showValidationModal, setShowValidationModal] = useState<boolean>(false);
 
   const coreSDK = React.useMemo(() => LookerExtensionSDK.createClient(extensionSDK), [extensionSDK]);
 
@@ -141,14 +146,71 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
         
         {/* Header Controls: Wrench IDE Button & User status badge with dropdown */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <button
-            className="btn-ide-link"
-            onClick={handleOpenIdeConfig}
-            title={indexFileLoaded ? "Edit index.md in Looker IDE" : "Open nano_admin Project in Looker IDE"}
-            aria-label="Edit Configuration in Looker IDE"
-          >
-            <WrenchIcon size={18} />
-          </button>
+          <div className="wrench-dropdown-container" style={{ position: 'relative' }}>
+            <button
+              className="btn-ide-link"
+              onClick={handleToggleWrenchDropdown}
+              title="Developer Configuration Tools"
+              aria-label="Developer Configuration Tools"
+              style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+            >
+              <WrenchIcon size={18} />
+              <span style={{ fontSize: '10px' }}>▼</span>
+            </button>
+
+            {wrenchDropdownOpen && (
+              <div
+                className="status-dropdown-menu"
+                style={{
+                  position: 'absolute',
+                  right: 0,
+                  top: 'calc(100% + 6px)',
+                  background: '#ffffff',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '8px',
+                  boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05)',
+                  padding: '6px 0',
+                  minWidth: '220px',
+                  zIndex: 100
+                }}
+              >
+                <div
+                  onClick={handleOpenIdeFromMenu}
+                  style={{
+                    padding: '10px 14px',
+                    fontSize: '13px',
+                    color: '#1e293b',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontWeight: 500
+                  }}
+                >
+                  <span>📝</span>
+                  <span>Edit index.md in Looker IDE</span>
+                </div>
+
+                <div
+                  onClick={handleValidateDevIndexFromMenu}
+                  style={{
+                    padding: '10px 14px',
+                    fontSize: '13px',
+                    color: '#1e293b',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontWeight: 500,
+                    borderTop: '1px solid #f1f5f9'
+                  }}
+                >
+                  <span>🧪</span>
+                  <span>Validate Dev index.md</span>
+                </div>
+              </div>
+            )}
+          </div>
 
           <div className="user-dropdown-container">
             <div className="user-badge" onClick={handleToggleDropdown}>
@@ -257,30 +319,6 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
               <span style={{ color: 'var(--text-muted)' }}>/</span>
               <span style={{ fontWeight: '600', color: '#1a202c' }}>{activeWorkflow.label}</span>
             </div>
-
-            {/* Quick Page Tab Switcher */}
-            {availablePageWorkflows.length > 1 && (
-              <div style={{ display: 'flex', gap: '6px' }}>
-                {availablePageWorkflows.map(wf => (
-                  <button
-                    key={wf.id}
-                    onClick={() => handleNavigateToWorkflow(wf.id)}
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: '20px',
-                      fontSize: '12px',
-                      fontWeight: '600',
-                      cursor: 'pointer',
-                      border: 'none',
-                      background: wf.id === activeWorkflowId ? 'var(--primary-color)' : 'rgba(0,0,0,0.05)',
-                      color: wf.id === activeWorkflowId ? 'white' : 'var(--text-muted)'
-                    }}
-                  >
-                    {wf.label}
-                  </button>
-                ))}
-              </div>
-            )}
           </nav>
 
           {/* Full Page Workflow Component Container */}
@@ -303,25 +341,60 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
             <h2 style={{ fontSize: '20px', fontWeight: '600', marginBottom: '16px' }}>Available Actions</h2>
             
             {availableWorkflows.length === 0 ? (
-              <div className="card" style={{ padding: '36px 24px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                <div style={{ fontSize: '36px', marginBottom: '12px' }}>⚙️</div>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', fontWeight: '600', color: 'var(--text-main)' }}>
-                  No Workflows Configured Yet
-                </h3>
-                <p className="card-description" style={{ margin: '0 0 20px 0', maxWidth: '520px', color: 'var(--text-muted)', lineHeight: '1.5', textAlign: 'center' }}>
-                  {indexFileLoaded
-                    ? "No active administrative workflows found in index.md. Add workflow definitions to your project configuration to make them available here."
-                    : "Could not locate index.md in the nano_admin Looker project. Create or configure index.md in your project root to define administrative workflows."}
-                </p>
-                <button
-                  className="btn btn-primary"
-                  onClick={handleOpenIdeConfig}
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
-                >
-                  <WrenchIcon size={16} color="#ffffff" />
-                  <span>{indexFileLoaded ? 'Configure index.md in Looker IDE →' : 'Open nano_admin Project in IDE →'}</span>
-                </button>
-              </div>
+              indexParseError ? (
+                <div className="card" style={{ padding: '28px 24px', borderLeft: '4px solid #ea4335', background: '#ffffff' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px' }}>
+                    <span style={{ fontSize: '24px' }}>⚠️</span>
+                    <h3 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: '#ea4335' }}>
+                      Invalid Production index.md Configuration
+                    </h3>
+                  </div>
+                  <p style={{ margin: '0 0 12px 0', color: '#374151', fontSize: '14px', lineHeight: '1.5' }}>
+                    The production configuration file <code>index.md</code> in Looker project <code>nano_admin</code> was found, but could not be parsed due to a YAML syntax error.
+                  </p>
+                  <div style={{
+                    background: '#1f2937',
+                    color: '#f9fafb',
+                    padding: '12px 16px',
+                    borderRadius: '6px',
+                    fontFamily: 'monospace',
+                    fontSize: '12px',
+                    whiteSpace: 'pre-wrap',
+                    wordBreak: 'break-word',
+                    marginBottom: '16px'
+                  }}>
+                    {indexParseError}
+                  </div>
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleOpenIdeConfig}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', alignSelf: 'flex-start' }}
+                  >
+                    <WrenchIcon size={16} color="#ffffff" />
+                    <span>Fix index.md in Looker IDE →</span>
+                  </button>
+                </div>
+              ) : (
+                <div className="card" style={{ padding: '36px 24px', textAlign: 'center', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                  <div style={{ fontSize: '36px', marginBottom: '12px' }}>⚙️</div>
+                  <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', fontWeight: '600', color: 'var(--text-main)' }}>
+                    No Workflows Configured Yet
+                  </h3>
+                  <p className="card-description" style={{ margin: '0 0 20px 0', maxWidth: '520px', color: 'var(--text-muted)', lineHeight: '1.5', textAlign: 'center' }}>
+                    {indexFileLoaded
+                      ? "No active administrative workflows found in index.md. Add workflow definitions to your project configuration to make them available here."
+                      : "Could not locate index.md in the nano_admin Looker project. Create or configure index.md in your project root to define administrative workflows."}
+                  </p>
+                  <button
+                    className="btn btn-primary"
+                    onClick={handleOpenIdeConfig}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+                  >
+                    <WrenchIcon size={16} color="#ffffff" />
+                    <span>{indexFileLoaded ? 'Configure index.md in Looker IDE →' : 'Open nano_admin Project in IDE →'}</span>
+                  </button>
+                </div>
+              )
             ) : (
               <div className="dashboard-grid">
                 {availableWorkflows.map((workflow, idx) => {
@@ -393,6 +466,175 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
           )}
         </>
       )}
+
+      {/* Dev Workspace Validation Result Modal */}
+      {showValidationModal && (
+        <div style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          background: 'rgba(15, 23, 42, 0.6)',
+          backdropFilter: 'blur(4px)',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center',
+          zIndex: 1000,
+          padding: '20px'
+        }}>
+          <div style={{
+            background: 'white',
+            borderRadius: '12px',
+            width: '100%',
+            maxWidth: '560px',
+            boxShadow: '0 20px 25px -5px rgba(0,0,0,0.2)',
+            overflow: 'hidden',
+            display: 'flex',
+            flexDirection: 'column'
+          }}>
+            <div style={{
+              background: '#0f172a',
+              color: 'white',
+              padding: '16px 20px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center'
+            }}>
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>
+                🧪 Development index.md Validation
+              </h3>
+              <button
+                onClick={handleCloseValidationModal}
+                style={{ background: 'none', border: 'none', color: '#94a3b8', fontSize: '18px', cursor: 'pointer' }}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              {validatingDev ? (
+                <div style={{ padding: '32px 0', textAlign: 'center', color: '#64748b' }}>
+                  <div className="spinner" style={{ margin: '0 auto 12px auto' }}></div>
+                  <p style={{ margin: 0, fontSize: '14px' }}>
+                    Fetching and validating development version of <code>index.md</code> from Looker dev workspace...
+                  </p>
+                </div>
+              ) : devValidationResult ? (
+                devValidationResult.valid ? (
+                  <div>
+                    <div style={{
+                      background: '#f0fdf4',
+                      border: '1px solid #bbf7d0',
+                      color: '#15803d',
+                      padding: '14px 16px',
+                      borderRadius: '8px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '10px',
+                      marginBottom: '16px'
+                    }}>
+                      <span style={{ fontSize: '20px' }}>🎉</span>
+                      <div>
+                        <strong style={{ display: 'block', fontSize: '14px' }}>Development index.md is Valid!</strong>
+                        <span style={{ fontSize: '12px' }}>
+                          Parsed {devValidationResult.workflows_count || 0} workflow definition(s) successfully without syntax or schema errors.
+                        </span>
+                      </div>
+                    </div>
+
+                    <h4 style={{ margin: '0 0 8px 0', fontSize: '13px', fontWeight: 600, color: '#334155' }}>
+                      Parsed Workflows Summary
+                    </h4>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '200px', overflowY: 'auto' }}>
+                      {(devValidationResult.workflows || []).map((wf: any, idx: number) => (
+                        <div key={idx} style={{
+                          background: '#f8fafc',
+                          border: '1px solid #e2e8f0',
+                          padding: '10px 12px',
+                          borderRadius: '6px',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center'
+                        }}>
+                          <div>
+                            <strong style={{ fontSize: '13px', color: '#0f172a' }}>{wf.label}</strong>
+                            <span style={{ fontSize: '11px', color: '#64748b', display: 'block' }}>
+                              ID: <code>{wf.id}</code> | Template: <code>{wf.template}</code>
+                            </span>
+                          </div>
+                          <span style={{ fontSize: '11px', background: '#e0f2fe', color: '#0369a1', padding: '2px 8px', borderRadius: '12px' }}>
+                            {wf.mount_type || 'card'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <div>
+                    <div style={{
+                      background: '#fef2f2',
+                      border: '1px solid #fecaca',
+                      color: '#b91c1c',
+                      padding: '14px 16px',
+                      borderRadius: '8px',
+                      display: 'flex',
+                      alignItems: 'flex-start',
+                      gap: '10px',
+                      marginBottom: '14px'
+                    }}>
+                      <span style={{ fontSize: '20px' }}>❌</span>
+                      <div>
+                        <strong style={{ display: 'block', fontSize: '14px' }}>Validation Failed</strong>
+                        <span style={{ fontSize: '12px' }}>{devValidationResult.message}</span>
+                      </div>
+                    </div>
+
+                    {devValidationResult.details && (
+                      <div style={{
+                        background: '#1f2937',
+                        color: '#f9fafb',
+                        padding: '12px 14px',
+                        borderRadius: '6px',
+                        fontFamily: 'monospace',
+                        fontSize: '12px',
+                        whiteSpace: 'pre-wrap',
+                        wordBreak: 'break-word'
+                      }}>
+                        {devValidationResult.details}
+                      </div>
+                    )}
+                  </div>
+                )
+              ) : null}
+            </div>
+
+            <div style={{
+              background: '#f8fafc',
+              borderTop: '1px solid #e2e8f0',
+              padding: '12px 20px',
+              display: 'flex',
+              justifyContent: 'flex-end'
+            }}>
+              <button
+                className="btn"
+                onClick={handleCloseValidationModal}
+                style={{
+                  background: '#334155',
+                  color: 'white',
+                  border: 'none',
+                  padding: '6px 16px',
+                  borderRadius: '6px',
+                  fontSize: '13px',
+                  cursor: 'pointer'
+                }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 
@@ -401,41 +643,155 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
     fetchUserAndWorkflows();
   }
 
+  function resolveCurrentRoute(): string {
+    const sdkRoute = (extensionSDK as any)?.lookerHostData?.route || (extensionSDK as any)?.route;
+    const hashRoute = window.location.hash;
+    const pathRoute = window.location.pathname;
+
+    const rawRoute = sdkRoute || hashRoute || pathRoute || '';
+    const cleanRoute = rawRoute
+      .replace(/^#\/?/, '')
+      .replace(/^\/?/, '')
+      .replace(/^extensions\/[^\/]+\/?/, '');
+    
+    return cleanRoute.split('?')[0].split('#')[0];
+  }
+
   function handleHistorySync() {
-    const handlePopState = () => {
-      const hash = window.location.hash.replace(/^#\/?/, '');
-      if (!hash) {
+    const handleRouteChange = () => {
+      const currentRoute = resolveCurrentRoute();
+      if (!currentRoute) {
         setActiveWorkflowId(null);
       } else {
-        const matchingWf = workflows.find(w => w.id === hash);
+        const matchingWf = workflows.find(w => w.id === currentRoute);
         if (matchingWf) {
           setActiveWorkflowId(matchingWf.id);
-        } else {
-          setActiveWorkflowId(null);
         }
       }
     };
 
-    window.addEventListener('popstate', handlePopState);
-    window.addEventListener('hashchange', handlePopState);
+    window.addEventListener('popstate', handleRouteChange);
+    window.addEventListener('hashchange', handleRouteChange);
 
-    // Deep-linking resolution on initial load
-    const initialHash = window.location.hash.replace(/^#\/?/, '');
-    if (initialHash && workflows.length > 0) {
-      const matchingWf = workflows.find(w => w.id === initialHash);
-      if (matchingWf) {
-        setActiveWorkflowId(matchingWf.id);
-      }
+    // Initial route resolution on reload or load
+    if (workflows.length > 0) {
+      handleRouteChange();
     }
 
     return () => {
-      window.removeEventListener('popstate', handlePopState);
-      window.removeEventListener('hashchange', handlePopState);
+      window.removeEventListener('popstate', handleRouteChange);
+      window.removeEventListener('hashchange', handleRouteChange);
     };
   }
 
   function handleToggleDropdown() {
     setDropdownOpen(prev => !prev);
+  }
+
+  function handleToggleWrenchDropdown() {
+    setWrenchDropdownOpen(prev => !prev);
+  }
+
+  function handleOpenIdeFromMenu() {
+    setWrenchDropdownOpen(false);
+    handleOpenIdeConfig();
+  }
+
+  function handleValidateDevIndexFromMenu() {
+    setWrenchDropdownOpen(false);
+    setShowValidationModal(true);
+    runDevValidation();
+  }
+
+  function handleCloseValidationModal() {
+    setShowValidationModal(false);
+  }
+
+  async function runDevValidation() {
+    setValidatingDev(true);
+    setDevValidationResult(null);
+    try {
+      addLog('Fetching index.md from Looker Extension SDK for invoking user...');
+      let indexContent = '';
+      try {
+        const rawContent = await coreSDK.ok(
+          coreSDK.get('/projects/nano_admin/file/content', { file_path: 'index.md' }) as any
+        );
+        indexContent = typeof rawContent === 'string' ? rawContent : ((rawContent as any)?.value || JSON.stringify(rawContent));
+      } catch (sdkErr: any) {
+        addLog(`Notice: Extension SDK file content fetch returned: ${sdkErr.message || String(sdkErr)}`);
+      }
+
+      addLog('Initiating development index.md validation check via backend...');
+      const data = await callBackendAction('validate_dev_index', { index_content: indexContent });
+      setDevValidationResult(data);
+      addLog(`Dev validation completed: ${data?.valid ? 'Valid' : 'Invalid'}`);
+    } catch (err: any) {
+      console.error('Dev validation failed:', err);
+      setDevValidationResult({
+        valid: false,
+        message: 'Backend call failed during development validation.',
+        details: err.message || String(err)
+      });
+    } finally {
+      setValidatingDev(false);
+    }
+  }
+
+  async function callBackendAction(action: string, payload?: any) {
+    addLog(`Initiating backend call for action '${action}'...`);
+    setGcfStatus('checking');
+    try {
+      const requestPayload = {
+        action,
+        ...payload
+      };
+      const headers = {
+        'Content-Type': 'application/json',
+        'Authorization': `looker-attribute-challenge ${extensionSDK.createSecretKeyTag('nano_admin_challenge')}`,
+        'X-Looker-User-ID': currentUser ? String(currentUser.id) : ''
+      };
+
+      let response = await extensionSDK.serverProxy(BACKEND_URL, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(requestPayload)
+      });
+
+      if (response.status === 401) {
+        addLog(`Challenge required or expired. Retrying backend action '${action}'...`);
+        const errData = response.body;
+        checkBuildHash(errData);
+        response = await extensionSDK.serverProxy(BACKEND_URL, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(requestPayload)
+        });
+      }
+
+      if (!response.ok) {
+        const err = new Error(`HTTP Error: ${response.status}`);
+        (err as any).status = response.status;
+        throw err;
+      }
+
+      const data = response.body;
+      setGcfStatus('connected');
+      checkBuildHash(data);
+      addLog(`Backend responded successfully for action '${action}'.`);
+      return data;
+    } catch (error: any) {
+      console.error(error);
+      if (error.status === 401) {
+        setGcfStatus('auth_error');
+      } else if (error.status) {
+        setGcfStatus('other_error');
+      } else {
+        setGcfStatus('offline');
+      }
+      addLog(`Backend connection failed: ${String(error)}`);
+      throw error;
+    }
   }
 
   function handleNavigateToWorkflow(workflowId: string) {
@@ -499,7 +855,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
   function getMountType(wf: any): 'page' | 'card' {
     if (wf.mount_type) return wf.mount_type;
     if (wf.parameters?.mount_type) return wf.parameters.mount_type;
-    return wf.template === 'crud' ? 'page' : 'card';
+    return 'page';
   }
 
   function checkBuildHash(data: any) {
@@ -591,6 +947,11 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
       if (data.index_file_loaded !== undefined) {
         setIndexFileLoaded(data.index_file_loaded);
       }
+      if (data.parse_error) {
+        setIndexParseError(data.parse_error);
+      } else {
+        setIndexParseError(null);
+      }
       if (data.workflows) {
         setWorkflows(data.workflows);
       }
@@ -644,14 +1005,11 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
       }
 
       if (!response.ok) {
-        if (response.status === 403) {
-          const errData = response.body;
-          const err = new Error(errData.error || 'Forbidden');
-          (err as any).status = 403;
-          throw err;
-        }
-        const err = new Error(`HTTP Error: ${response.status}`);
+        const errData = typeof response.body === 'object' ? response.body : {};
+        const message = errData?.error || errData?.message || `HTTP Error: ${response.status}`;
+        const err = new Error(message);
         (err as any).status = response.status;
+        (err as any).details = errData;
         throw err;
       }
 

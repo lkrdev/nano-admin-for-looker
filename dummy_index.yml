@@ -3,7 +3,6 @@ workflows:
     label: "HR Disable Users"
     description: "Manage employee account statuses and compliance disabling."
     template: "crud"
-    mount_type: "page"
     authorized_groups:
       - "3"
     parameters:
@@ -24,7 +23,6 @@ workflows:
     label: "Create New Connections"
     description: "Provision and inspect database connection configurations."
     template: "crud"
-    mount_type: "page"
     authorized_groups:
       - "developer-group-id"
     parameters:
@@ -44,8 +42,31 @@ workflows:
     label: "Terminate Long-Running Queries"
     description: "Scan active Looker queries and terminate runs exceeding 10 minutes."
     template: "kill-queries"
-    mount_type: "card"
     authorized_groups:
       - "1"
     parameters:
       min_runtime_seconds: 600
+
+  - id: "limited-history-audit"
+    label: "Limited System Activity Audit"
+    description: "Inspect query activity history with tenant user filtering and date limits."
+    template: "limited-system-activity"
+    authorized_groups:
+      - "1"
+      - "3"
+    parameters:
+      explores:
+        - name: "history"
+          allow_csv_export: true
+          require_date_filter: true
+          max_row_limit: 500
+        - name: "user"
+          allow_csv_export: false
+          max_row_limit: 200
+        - name: "dashboard"
+          allow_csv_export: true
+          max_row_limit: 100
+      user_id_limitation:
+        enabled: true
+        mode: "tenant_groups"
+        attribute_name: "tenant"
