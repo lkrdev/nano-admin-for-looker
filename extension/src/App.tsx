@@ -54,18 +54,22 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 
 interface WorkflowLoaderProps {
   workflow: any;
+  subRoute?: string | null;
   coreSDK: any;
   extensionSDK: any;
   addLog: (msg: string) => void;
   callWorkflowBackend: (workflowId: string, action: string, payload?: any) => Promise<any>;
+  onNavigateSubRoute?: (subPath: string) => void;
 }
 
 const WorkflowLoader: React.FC<WorkflowLoaderProps> = ({
   workflow,
+  subRoute,
   coreSDK,
   extensionSDK,
   addLog,
-  callWorkflowBackend
+  callWorkflowBackend,
+  onNavigateSubRoute
 }) => {
   const LazyComponent = React.useMemo(() => {
     const template = workflow.template;
@@ -82,6 +86,8 @@ const WorkflowLoader: React.FC<WorkflowLoaderProps> = ({
         workflowId={workflow.id}
         label={workflow.label}
         parameters={workflow.parameters || {}}
+        subRoute={subRoute || ''}
+        onNavigateSubRoute={onNavigateSubRoute}
         coreSDK={coreSDK}
         extensionSDK={extensionSDK}
         addLog={addLog}
@@ -100,6 +106,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
   const [indexFileLoaded, setIndexFileLoaded] = useState<boolean>(true);
   const [indexParseError, setIndexParseError] = useState<string | null>(null);
   const [activeWorkflowId, setActiveWorkflowId] = useState<string | null>(null);
+  const [activeSubRoute, setActiveSubRoute] = useState<string | null>(null);
   const [hashMismatch, setHashMismatch] = useState<boolean>(false);
   const [backendHash, setBackendHash] = useState<string>('');
   const [backendTimestamp, setBackendTimestamp] = useState<string>('');
@@ -300,7 +307,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
       {activeWorkflowId && activeWorkflow ? (
         <div className="page-view-section">
           {/* Shared Navigation Header / Interactive Breadcrumb */}
-          <nav className="workflow-nav-bar">
+          <nav className="workflow-nav-bar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '15px' }}>
               <button
                 onClick={handleBackToNanoAdmin}
@@ -317,7 +324,58 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
                 Nano Admin
               </button>
               <span style={{ color: 'var(--text-muted)' }}>/</span>
-              <span style={{ fontWeight: '600', color: '#1a202c' }}>{activeWorkflow.label}</span>
+              {activeSubRoute ? (
+                <button
+                  onClick={() => handleNavigateToWorkflow(activeWorkflow.id, '')}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    color: 'var(--primary-color)',
+                    fontWeight: '600',
+                    cursor: 'pointer',
+                    fontSize: '15px'
+                  }}
+                >
+                  {activeWorkflow.label}
+                </button>
+              ) : (
+                <span style={{ fontWeight: '600', color: '#1a202c' }}>{activeWorkflow.label}</span>
+              )}
+              {activeSubRoute && (
+                <>
+                  <span style={{ color: 'var(--text-muted)' }}>/</span>
+                  <span style={{ fontWeight: '600', color: '#1a202c' }}>{activeSubRoute}</span>
+                </>
+              )}
+            </div>
+
+            {/* Right-aligned Policy Badges */}
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+              {activeWorkflow.parameters?.user_id_limitation?.enabled && (
+                <span style={{ background: '#eff6ff', color: '#1d4ed8', border: '1px solid #bfdbfe', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 500 }}>
+                  🔒 User ID Enforced ({activeWorkflow.parameters.user_id_limitation.mode || 'own'})
+                </span>
+              )}
+              {(() => {
+                const rawCfg = (activeWorkflow.parameters?.explores || []).find((e: any) => e.name === activeSubRoute);
+                if (!rawCfg) return null;
+                const expCfg = normalizeExploreConfig(rawCfg, activeSubRoute || undefined);
+                return (
+                  <>
+                    {expCfg.required_filter_fields && expCfg.required_filter_fields.length > 0 && (
+                      <span style={{ background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 500 }}>
+                        📅 Filter: {expCfg.required_filter_fields[0]}
+                      </span>
+                    )}
+                    {expCfg.max_row_limit && (
+                      <span style={{ background: '#e0f2fe', color: '#075985', border: '1px solid #bae6fd', padding: '2px 8px', borderRadius: '4px', fontSize: '11px', fontWeight: 500 }}>
+                        ⚡ Limit: {expCfg.max_row_limit}
+                      </span>
+                    )}
+                  </>
+                );
+              })()}
             </div>
           </nav>
 
@@ -326,10 +384,12 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
             <ErrorBoundary>
               <WorkflowLoader
                 workflow={activeWorkflow}
+                subRoute={activeSubRoute}
                 coreSDK={coreSDK}
                 extensionSDK={extensionSDK}
                 addLog={addLog}
                 callWorkflowBackend={callWorkflowBackend}
+                onNavigateSubRoute={(subPath) => handleNavigateToWorkflow(activeWorkflow.id, subPath)}
               />
             </ErrorBoundary>
           </div>
@@ -639,11 +699,32 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
   );
 
   // 4. Hoisted Function Definitions
+  function normalizeExploreConfig(rawConfig: any, exploreName?: string): any {
+    if (!rawConfig) return { name: exploreName || '' };
+    const name = rawConfig.name || exploreName || '';
+    let required_filter_fields: string[] = [];
+
+    if (Array.isArray(rawConfig.required_filter_fields) && rawConfig.required_filter_fields.length > 0) {
+      required_filter_fields = rawConfig.required_filter_fields;
+    } else if (Array.isArray(rawConfig.required_date_filter_fields) && rawConfig.required_date_filter_fields.length > 0) {
+      required_filter_fields = rawConfig.required_date_filter_fields;
+    } else if (typeof rawConfig.required_date_filter_field === 'string' && rawConfig.required_date_filter_field.trim()) {
+      required_filter_fields = [rawConfig.required_date_filter_field.trim()];
+    } else if (rawConfig.require_date_filter) {
+      required_filter_fields = [`${name || 'history'}.created_time`];
+    }
+
+    return {
+      ...rawConfig,
+      name,
+      required_filter_fields
+    };
+  }
   function handleInitialize() {
     fetchUserAndWorkflows();
   }
 
-  function resolveCurrentRoute(): string {
+  function resolveCurrentRoute(): { workflowId: string | null; subRoute: string | null } {
     const sdkRoute = (extensionSDK as any)?.lookerHostData?.route || (extensionSDK as any)?.route;
     const hashRoute = window.location.hash;
     const pathRoute = window.location.pathname;
@@ -652,20 +733,35 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
     const cleanRoute = rawRoute
       .replace(/^#\/?/, '')
       .replace(/^\/?/, '')
-      .replace(/^extensions\/[^\/]+\/?/, '');
-    
-    return cleanRoute.split('?')[0].split('#')[0];
+      .replace(/^extensions\/[^\/]+\/?/, '')
+      .split('?')[0]
+      .split('#')[0];
+
+    if (!cleanRoute) {
+      return { workflowId: null, subRoute: null };
+    }
+
+    const parts = cleanRoute.split('/');
+    return {
+      workflowId: parts[0] || null,
+      subRoute: parts.slice(1).join('/') || null
+    };
   }
 
   function handleHistorySync() {
     const handleRouteChange = () => {
-      const currentRoute = resolveCurrentRoute();
-      if (!currentRoute) {
+      const { workflowId, subRoute } = resolveCurrentRoute();
+      if (!workflowId) {
         setActiveWorkflowId(null);
+        setActiveSubRoute(null);
       } else {
-        const matchingWf = workflows.find(w => w.id === currentRoute);
+        const matchingWf = workflows.find(w => w.id === workflowId);
         if (matchingWf) {
           setActiveWorkflowId(matchingWf.id);
+          setActiveSubRoute(subRoute || null);
+        } else {
+          setActiveWorkflowId(null);
+          setActiveSubRoute(null);
         }
       }
     };
@@ -794,8 +890,8 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
     }
   }
 
-  function handleNavigateToWorkflow(workflowId: string) {
-    const routePath = `/${workflowId}`;
+  function handleNavigateToWorkflow(workflowId: string, subPath: string = '') {
+    const routePath = subPath ? `/${workflowId}/${subPath}` : `/${workflowId}`;
     const hashUrl = `#${routePath}`;
 
     if (window.location.hash !== hashUrl) {
@@ -805,6 +901,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
       extensionSDK.clientRouteChanged(routePath);
     }
     setActiveWorkflowId(workflowId);
+    setActiveSubRoute(subPath || null);
   }
 
   function handleBackToNanoAdmin() {
@@ -815,6 +912,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
       extensionSDK.clientRouteChanged('/');
     }
     setActiveWorkflowId(null);
+    setActiveSubRoute(null);
   }
 
   function handleOpenIdeConfig() {

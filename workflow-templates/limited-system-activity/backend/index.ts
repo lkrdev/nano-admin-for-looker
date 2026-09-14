@@ -3,7 +3,7 @@ import { getTenantUserIds } from '../../../auth_utils';
 export interface ExploreConfig {
   name: string;
   allow_csv_export?: boolean;
-  require_date_filter?: boolean;
+  required_filter_fields?: string[];
   max_row_limit?: number;
 }
 
@@ -59,9 +59,9 @@ export const handler = async (
 
   if (action === 'get_explore_fields') {
     const exploreName = String(payload?.explore_name || '').trim();
-    validateExploreIsAllowed(exploreName, allowedExplores);
+    const exploreConfig = validateExploreIsAllowed(exploreName, allowedExplores);
     const fields = await fetchExploreFields(context.sdk, exploreName);
-    return { explore_name: exploreName, fields };
+    return { explore_name: exploreName, fields, explore_config: exploreConfig };
   }
 
   if (action === 'run_query') {
@@ -91,6 +91,34 @@ export const handler = async (
       rows: queryResults,
       row_count: Array.isArray(queryResults) ? queryResults.length : 0,
       limit_applied: rowLimit
+    };
+  }
+
+  if (action === 'preview_sql') {
+    const exploreName = String(payload?.explore_name || '').trim();
+    const exploreConfig = validateExploreIsAllowed(exploreName, allowedExplores);
+    const exploreMeta = await fetchExploreMetadata(context.sdk, exploreName);
+
+    const userIdField = findUserIdFieldInExplore(exploreMeta, exploreName);
+    const userIds = await resolveUserIdFilterValues(context.sdk, context.userId, limitation);
+    const queryFilters = buildEnforcedFilters(payload?.filters || {}, limitation, userIds, userIdField);
+
+    validatePerformancePresets(exploreConfig, payload?.fields || [], queryFilters, exploreMeta);
+
+    const rowLimit = calculateRowLimit(payload?.limit, exploreConfig.max_row_limit);
+
+    const sqlData = await executeInlineQuery(
+      context.sdk,
+      'sql',
+      exploreName,
+      payload?.fields || [],
+      queryFilters,
+      rowLimit
+    );
+
+    return {
+      explore_name: exploreName,
+      sql: typeof sqlData === 'string' ? sqlData : String(sqlData)
     };
   }
 
@@ -140,7 +168,8 @@ async function fetchAndValidateExplores(
   console.log(`[Limited-System-Activity] Validating ${allowedExplores.length} configured explores...`);
   const results = [];
 
-  for (const config of allowedExplores) {
+  for (const rawConfig of allowedExplores) {
+    const config = normalizeExploreConfig(rawConfig);
     try {
       const meta = await fetchExploreMetadata(sdk, config.name);
       const userIdField = findUserIdFieldInExplore(meta, config.name);
@@ -180,6 +209,35 @@ async function fetchExploreMetadata(sdk: any, exploreName: string): Promise<any>
   );
 }
 
+export function normalizeExploreConfig(rawConfig: any, exploreName?: string): ExploreConfig {
+  if (!rawConfig) {
+    return { name: exploreName || '' };
+  }
+
+  const name = rawConfig.name || exploreName || '';
+  const allow_csv_export = Boolean(rawConfig.allow_csv_export);
+  const max_row_limit = typeof rawConfig.max_row_limit === 'number' ? rawConfig.max_row_limit : undefined;
+
+  let required_filter_fields: string[] = [];
+
+  if (Array.isArray(rawConfig.required_filter_fields) && rawConfig.required_filter_fields.length > 0) {
+    required_filter_fields = rawConfig.required_filter_fields;
+  } else if (Array.isArray(rawConfig.required_date_filter_fields) && rawConfig.required_date_filter_fields.length > 0) {
+    required_filter_fields = rawConfig.required_date_filter_fields;
+  } else if (typeof rawConfig.required_date_filter_field === 'string' && rawConfig.required_date_filter_field.trim()) {
+    required_filter_fields = [rawConfig.required_date_filter_field.trim()];
+  } else if (rawConfig.require_date_filter) {
+    required_filter_fields = [`${name || 'history'}.created_time`];
+  }
+
+  return {
+    name,
+    allow_csv_export,
+    required_filter_fields,
+    max_row_limit
+  };
+}
+
 function validateExploreIsAllowed(exploreName: string, allowedExplores: ExploreConfig[]): ExploreConfig {
   if (!exploreName) {
     throw new Error('Explore name is required.');
@@ -188,7 +246,7 @@ function validateExploreIsAllowed(exploreName: string, allowedExplores: ExploreC
   if (!match) {
     throw new Error(`Explore "${exploreName}" is not permitted for this workflow.`);
   }
-  return match;
+  return normalizeExploreConfig(match, exploreName);
 }
 
 function findUserIdFieldInExplore(exploreMeta: any, exploreName: string): string {
@@ -273,26 +331,32 @@ function validatePerformancePresets(
   filters: Record<string, string>,
   exploreMeta: any
 ): void {
-  if (exploreConfig.require_date_filter) {
-    const dateFieldNames = findDateFieldsInExplore(exploreMeta);
-    const hasDateFilter = Object.keys(filters).some(filterField =>
-      dateFieldNames.includes(filterField)
-    );
+  const requiredFields = getRequiredFilterFields(exploreConfig);
 
-    if (!hasDateFilter) {
-      throw new Error(`Explore "${exploreConfig.name}" requires a filter on a date/time field (e.g. ${dateFieldNames.slice(0, 3).join(', ')}) before running a query.`);
+  if (requiredFields.length > 0) {
+    const hasRequiredFilter = Object.keys(filters).some(filterField => {
+      return requiredFields.some(reqField => {
+        if (filterField === reqField) return true;
+        // Accept dimension group siblings (e.g. history.created_date when history.created_time is specified)
+        const parts = reqField.split('.');
+        if (parts.length === 2) {
+          const groupPrefix = `${parts[0]}.${parts[1].split('_')[0]}_`;
+          if (filterField.startsWith(groupPrefix)) return true;
+        }
+        return false;
+      });
+    });
+
+    if (!hasRequiredFilter) {
+      throw new Error(`Explore "${exploreConfig.name}" requires a filter on ${requiredFields.join(' or ')} before running a query.`);
     }
   }
 }
 
-function findDateFieldsInExplore(exploreMeta: any): string[] {
-  const dimensions = exploreMeta?.fields?.dimensions || exploreMeta?.dimensions || [];
-  return dimensions
-    .filter((dim: any) => {
-      const type = String(dim.type || '').toLowerCase();
-      return type.includes('date') || type.includes('time') || type.includes('timestamp');
-    })
-    .map((dim: any) => dim.name);
+function getRequiredFilterFields(exploreConfig: ExploreConfig): string[] {
+  return exploreConfig.required_filter_fields && Array.isArray(exploreConfig.required_filter_fields)
+    ? exploreConfig.required_filter_fields
+    : [];
 }
 
 function calculateRowLimit(userLimit?: number, maxRowLimit?: number): number {
@@ -330,7 +394,7 @@ async function fetchExploreFields(sdk: any, exploreName: string): Promise<any> {
 
 async function executeInlineQuery(
   sdk: any,
-  resultFormat: 'json' | 'csv',
+  resultFormat: 'json' | 'csv' | 'sql',
   exploreName: string,
   fields: string[],
   filters: Record<string, string>,

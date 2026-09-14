@@ -4,6 +4,8 @@ export interface WorkflowComponentProps {
   workflowId: string;
   label: string;
   parameters: any;
+  subRoute?: string;
+  onNavigateSubRoute?: (subPath: string) => void;
   coreSDK: any;
   extensionSDK: any;
   addLog: (msg: string) => void;
@@ -14,12 +16,13 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
   workflowId,
   label,
   parameters,
+  subRoute = '',
+  onNavigateSubRoute,
   addLog,
   callBackend
 }) => {
   // 1. Hook Declarations (State & Memos)
   const [explores, setExplores] = useState<any[]>([]);
-  const [selectedExploreName, setSelectedExploreName] = useState<string>('');
   const [fields, setFields] = useState<{ dimensions: any[]; measures: any[] }>({ dimensions: [], measures: [] });
   const [selectedFields, setSelectedFields] = useState<string[]>([]);
   const [filters, setFilters] = useState<Array<{ id: string; field: string; value: string }>>([]);
@@ -30,14 +33,20 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
   const [modalSearchTerm, setModalSearchTerm] = useState<string>('');
   const [modalCategoryFilter, setModalCategoryFilter] = useState<'all' | 'dimensions' | 'measures'>('all');
 
+  // Query Execution & Result States
   const [loadingExplores, setLoadingExplores] = useState<boolean>(true);
   const [loadingFields, setLoadingFields] = useState<boolean>(false);
   const [runningQuery, setRunningQuery] = useState<boolean>(false);
+  const [previewingSql, setPreviewingSql] = useState<boolean>(false);
   const [exportingCsv, setExportingCsv] = useState<boolean>(false);
 
   const [queryResults, setQueryResults] = useState<any[] | null>(null);
+  const [sqlPreview, setSqlPreview] = useState<string | null>(null);
+  const [activeResultTab, setActiveResultTab] = useState<'table' | 'sql'>('table');
   const [queryMeta, setQueryMeta] = useState<{ rowCount: number; limitApplied: number } | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const selectedExploreName = subRoute ? subRoute.trim() : '';
 
   const activeExplore = useMemo(() => {
     return explores.find(e => e.name === selectedExploreName);
@@ -63,15 +72,19 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
 
     if (!modalSearchTerm.trim()) return pool;
 
-    const term = modalSearchTerm.toLowerCase();
-    return pool.filter(f =>
-      f.name.toLowerCase().includes(term) ||
-      f.label.toLowerCase().includes(term) ||
-      (f.group_label && f.group_label.toLowerCase().includes(term))
-    );
+    const terms = modalSearchTerm.toLowerCase().split(/\s+/).filter(Boolean);
+    if (terms.length === 0) return pool;
+
+    return pool.filter(f => {
+      const haystack = `${f.name} ${f.label} ${f.group_label || ''} ${f.description || ''}`.toLowerCase();
+      return terms.every(term => haystack.includes(term));
+    });
   }, [allAvailableFields, fields, modalCategoryFilter, modalSearchTerm]);
 
-  const userIdLimitation = parameters?.user_id_limitation;
+  const hasExecutedResults = Boolean(
+    (activeResultTab === 'table' && queryResults) ||
+    (activeResultTab === 'sql' && sqlPreview)
+  );
 
   // 2. Effects
   useEffect(handleInitExplores, []);
@@ -80,132 +93,93 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
   // 3. Returned Component JSX
   if (loadingExplores) {
     return (
-      <div style={{ padding: '48px 24px', textAlign: 'center', color: '#64748b', fontFamily: 'Inter, system-ui, sans-serif' }}>
-        <div className="spinner" style={{ margin: '0 auto 16px auto' }}></div>
-        <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>Loading available System Activity explores...</p>
+      <div style={{ padding: '40px 20px', textAlign: 'center', color: '#64748b', fontFamily: 'Inter, system-ui, sans-serif' }}>
+        <div className="spinner" style={{ margin: '0 auto 12px auto' }}></div>
+        <p style={{ margin: 0, fontSize: '13px', fontWeight: 500 }}>Loading explores...</p>
       </div>
     );
   }
 
   if (explores.length === 0) {
     return (
-      <div className="card" style={{
-        padding: '48px 24px',
+      <div style={{
+        padding: '36px 20px',
         textAlign: 'center',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
         background: 'white',
-        borderRadius: '12px',
+        borderRadius: '8px',
         border: '1px solid #e2e8f0',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
         fontFamily: 'Inter, system-ui, sans-serif'
       }}>
-        <div style={{ fontSize: '40px', marginBottom: '12px' }}>📊</div>
-        <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', fontWeight: '600', color: '#0f172a' }}>
-          No Explores Available
+        <h3 style={{ margin: '0 0 4px 0', fontSize: '16px', fontWeight: '600', color: '#0f172a' }}>
+          No Explores Configured
         </h3>
-        <p style={{ margin: 0, maxWidth: '480px', color: '#64748b', fontSize: '14px', lineHeight: '1.5' }}>
-          No explores match the configured allowlist for this workflow or user permissions. Please check the <code>explores</code> configuration in <code>index.md</code>.
-        </p>
       </div>
     );
   }
 
-  // Pre-explore selection card grid (View A)
+  // Explore Picker View (subRoute is empty)
   if (!selectedExploreName) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', fontFamily: 'Inter, system-ui, sans-serif' }}>
-        <div style={{
-          background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
-          color: 'white',
-          padding: '24px',
-          borderRadius: '12px',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
-        }}>
-          <h2 style={{ margin: 0, fontSize: '22px', fontWeight: 600 }}>{label}</h2>
-          <p style={{ margin: '6px 0 0 0', fontSize: '14px', color: '#94a3b8' }}>
-            Select an authorized System Activity explore to launch the query builder.
-          </p>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', fontFamily: 'Inter, system-ui, sans-serif' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: '#0f172a' }}>Select Explore</h2>
+          <span style={{ fontSize: '12px', color: '#64748b' }}>{explores.length} available</span>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '12px' }}>
           {explores.map(exp => (
             <div
               key={exp.name}
+              onClick={() => handlePickExplore(exp.name)}
               style={{
                 background: 'white',
                 border: '1px solid #e2e8f0',
-                borderRadius: '12px',
-                padding: '20px',
-                boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+                borderRadius: '8px',
+                padding: '16px',
+                cursor: 'pointer',
                 display: 'flex',
                 flexDirection: 'column',
                 justifyContent: 'space-between',
-                gap: '16px',
-                transition: 'all 0.2s ease'
+                gap: '12px',
+                transition: 'all 0.15s ease'
               }}
             >
               <div>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
-                  <span style={{
-                    fontSize: '11px',
-                    fontWeight: 700,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.05em',
-                    background: '#f1f5f9',
-                    color: '#475569',
-                    padding: '2px 8px',
-                    borderRadius: '4px'
-                  }}>
-                    system__activity
-                  </span>
-                  <span style={{ fontSize: '12px', color: '#94a3b8' }}>{exp.name}</span>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                  <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: '#0f172a' }}>
+                    {exp.label}
+                  </h3>
+                  <code style={{ fontSize: '11px', color: '#64748b', background: '#f1f5f9', padding: '1px 6px', borderRadius: '4px' }}>
+                    {exp.name}
+                  </code>
                 </div>
 
-                <h3 style={{ margin: '0 0 6px 0', fontSize: '17px', fontWeight: 600, color: '#0f172a' }}>
-                  {exp.label}
-                </h3>
-                <p style={{ margin: 0, fontSize: '13px', color: '#64748b', lineHeight: '1.4' }}>
-                  {exp.description || `Explore system activity records for ${exp.name}.`}
-                </p>
-
-                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '12px' }}>
-                  {exp.require_date_filter && (
-                    <span style={{ fontSize: '11px', background: '#fef3c7', color: '#92400e', padding: '2px 8px', borderRadius: '12px', fontWeight: 500 }}>
-                      📅 Required Date Filter
-                    </span>
-                  )}
+                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginTop: '8px' }}>
+                  {(() => {
+                    const norm = normalizeExploreConfig(exp);
+                    if (!norm.required_filter_fields || norm.required_filter_fields.length === 0) return null;
+                    return (
+                      <span style={{ fontSize: '11px', background: '#fef3c7', color: '#92400e', padding: '2px 6px', borderRadius: '4px', fontWeight: 500 }}>
+                        Filter: {norm.required_filter_fields[0]}
+                      </span>
+                    );
+                  })()}
                   {exp.allow_csv_export && (
-                    <span style={{ fontSize: '11px', background: '#dcfce7', color: '#166534', padding: '2px 8px', borderRadius: '12px', fontWeight: 500 }}>
-                      📥 CSV Export
+                    <span style={{ fontSize: '11px', background: '#dcfce7', color: '#166534', padding: '2px 6px', borderRadius: '4px', fontWeight: 500 }}>
+                      CSV Export
                     </span>
                   )}
                   {exp.max_row_limit && (
-                    <span style={{ fontSize: '11px', background: '#e0f2fe', color: '#075985', padding: '2px 8px', borderRadius: '12px', fontWeight: 500 }}>
-                      ⚡ Max Limit: {exp.max_row_limit}
+                    <span style={{ fontSize: '11px', background: '#e0f2fe', color: '#075985', padding: '2px 6px', borderRadius: '4px', fontWeight: 500 }}>
+                      Limit: {exp.max_row_limit}
                     </span>
                   )}
                 </div>
               </div>
 
-              <button
-                onClick={() => handlePickExplore(exp.name)}
-                style={{
-                  background: '#2563eb',
-                  color: 'white',
-                  border: 'none',
-                  padding: '10px 16px',
-                  borderRadius: '6px',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  width: '100%',
-                  textAlign: 'center'
-                }}
-              >
-                Select Explore →
-              </button>
+              <div style={{ fontSize: '13px', fontWeight: 600, color: '#2563eb', textAlign: 'right' }}>
+                Open Explore →
+              </div>
             </div>
           ))}
         </div>
@@ -213,144 +187,46 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
     );
   }
 
-  // Query Workspace (View B)
+  // Explore Query Builder View (subRoute is active explore name)
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '20px', fontFamily: 'Inter, system-ui, sans-serif' }}>
-      {/* Header Banner */}
-      <div style={{
-        background: 'linear-gradient(135deg, #1e293b 0%, #0f172a 100%)',
-        color: 'white',
-        padding: '20px 24px',
-        borderRadius: '12px',
-        boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        flexWrap: 'wrap',
-        gap: '16px'
-      }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <h2 style={{ margin: 0, fontSize: '20px', fontWeight: 600 }}>{activeExplore?.label || selectedExploreName}</h2>
-            <span style={{ fontSize: '12px', color: '#94a3b8', background: 'rgba(255,255,255,0.1)', padding: '2px 8px', borderRadius: '4px' }}>
-              system__activity / {selectedExploreName}
-            </span>
-          </div>
-          <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#94a3b8' }}>
-            {activeExplore?.description || 'System Activity Query Builder'}
-          </p>
-        </div>
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {userIdLimitation?.enabled && (
-              <span style={{
-                background: 'rgba(59, 130, 246, 0.2)',
-                border: '1px solid rgba(59, 130, 246, 0.4)',
-                color: '#60a5fa',
-                padding: '4px 10px',
-                borderRadius: '16px',
-                fontSize: '12px',
-                fontWeight: 500
-              }}>
-                🔒 User ID Filter Enforced ({userIdLimitation.mode || 'own'})
-              </span>
-            )}
-            {activeExplore?.require_date_filter && (
-              <span style={{
-                background: 'rgba(245, 158, 11, 0.2)',
-                border: '1px solid rgba(245, 158, 11, 0.4)',
-                color: '#fbbf24',
-                padding: '4px 10px',
-                borderRadius: '16px',
-                fontSize: '12px',
-                fontWeight: 500
-              }}>
-                📅 Required Date Filter
-              </span>
-            )}
-            {activeExplore?.max_row_limit && (
-              <span style={{
-                background: 'rgba(16, 185, 129, 0.2)',
-                border: '1px solid rgba(16, 185, 129, 0.4)',
-                color: '#34d399',
-                padding: '4px 10px',
-                borderRadius: '16px',
-                fontSize: '12px',
-                fontWeight: 500
-              }}>
-                ⚡ Max Row Limit: {activeExplore.max_row_limit}
-              </span>
-            )}
-          </div>
-
-          <button
-            onClick={handleChangeExplore}
-            style={{
-              background: 'rgba(255,255,255,0.15)',
-              color: 'white',
-              border: '1px solid rgba(255,255,255,0.25)',
-              padding: '6px 14px',
-              borderRadius: '6px',
-              fontSize: '12px',
-              fontWeight: 600,
-              cursor: 'pointer'
-            }}
-          >
-            Change Explore 🔄
-          </button>
-        </div>
-      </div>
-
-      {/* Transparent Error Banner */}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', fontFamily: 'Inter, system-ui, sans-serif' }}>
+      {/* Error Alert */}
       {errorMsg && (
         <div style={{
           background: '#fef2f2',
           border: '1px solid #fecaca',
           color: '#dc2626',
-          padding: '14px 18px',
-          borderRadius: '8px',
-          fontSize: '14px',
-          lineHeight: '1.5',
+          padding: '12px 16px',
+          borderRadius: '6px',
+          fontSize: '13px',
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          gap: '12px',
-          boxShadow: '0 2px 6px rgba(220, 38, 38, 0.08)'
+          alignItems: 'center'
         }}>
-          <div>
-            <strong style={{ display: 'block', marginBottom: '2px', fontWeight: 600 }}>Backend Error</strong>
-            <span>⚠️ {errorMsg}</span>
-          </div>
+          <span>⚠️ {errorMsg}</span>
           <button
             onClick={handleClearError}
-            style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontWeight: 'bold', fontSize: '16px' }}
+            style={{ background: 'none', border: 'none', color: '#dc2626', cursor: 'pointer', fontWeight: 'bold' }}
           >
             ✕
           </button>
         </div>
       )}
 
-      {/* Selected Fields Summary Bar & Full-Width Field Picker Button */}
+      {/* Selected Fields Bar */}
       <div style={{
         background: 'white',
         border: '1px solid #e2e8f0',
-        borderRadius: '12px',
-        padding: '18px 20px',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+        borderRadius: '8px',
+        padding: '14px 18px',
         display: 'flex',
         flexDirection: 'column',
-        gap: '12px'
+        gap: '10px'
       }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-          <div>
-            <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: '#0f172a' }}>
-              Selected Query Fields ({selectedFields.length})
-            </h3>
-            <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#64748b' }}>
-              Click "Edit Fields" to open the full-width disambiguated field selector.
-            </p>
-          </div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: '#0f172a' }}>
+            Fields ({selectedFields.length})
+          </h3>
 
           <button
             onClick={handleOpenFieldPickerModal}
@@ -358,25 +234,22 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
               background: '#2563eb',
               color: 'white',
               border: 'none',
-              padding: '8px 16px',
+              padding: '6px 14px',
               borderRadius: '6px',
-              fontSize: '13px',
+              fontSize: '12px',
               fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
+              cursor: 'pointer'
             }}
           >
-            ✏️ Edit Fields ({selectedFields.length} selected)
+            Edit Fields
           </button>
         </div>
 
         {/* Selected Field Badges */}
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', minHeight: '32px', alignItems: 'center' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', minHeight: '28px', alignItems: 'center' }}>
           {selectedFields.length === 0 ? (
-            <span style={{ fontSize: '13px', color: '#94a3b8', fontStyle: 'italic' }}>
-              No fields selected. Click "Edit Fields" above to choose fields for your query.
+            <span style={{ fontSize: '12px', color: '#94a3b8', fontStyle: 'italic' }}>
+              No fields selected.
             </span>
           ) : (
             selectedFields.map(fieldName => {
@@ -389,21 +262,21 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
                   style={{
                     background: '#f1f5f9',
                     border: '1px solid #cbd5e1',
-                    borderRadius: '6px',
-                    padding: '4px 10px',
+                    borderRadius: '4px',
+                    padding: '3px 8px',
                     fontSize: '12px',
                     color: '#334155',
                     display: 'inline-flex',
                     alignItems: 'center',
-                    gap: '6px'
+                    gap: '4px'
                   }}
                   title={fieldName}
                 >
-                  <strong style={{ color: '#475569', fontWeight: 600 }}>{viewGroupLabel} &gt;</strong>
+                  <strong style={{ color: '#64748b' }}>{viewGroupLabel} &gt;</strong>
                   <span>{labelShort}</span>
                   <button
                     onClick={() => handleRemoveSelectedField(fieldName)}
-                    style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontWeight: 'bold', marginLeft: '4px', padding: 0 }}
+                    style={{ background: 'none', border: 'none', color: '#94a3b8', cursor: 'pointer', fontWeight: 'bold', padding: 0 }}
                   >
                     ✕
                   </button>
@@ -414,28 +287,47 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
         </div>
       </div>
 
-      {/* Query Controls & Filters Card */}
+      {/* Query Filters Card */}
       <div style={{
         background: 'white',
         border: '1px solid #e2e8f0',
-        borderRadius: '12px',
-        padding: '18px 20px',
+        borderRadius: '8px',
+        padding: '14px 18px',
         display: 'flex',
         flexDirection: 'column',
-        gap: '14px',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.05)'
+        gap: '12px'
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: '#0f172a' }}>
-            Query Controls &amp; Filters
-          </h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+            <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: '#0f172a' }}>
+              Filters ({filters.length})
+            </h3>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <label style={{ fontSize: '12px', color: '#64748b', fontWeight: 500 }}>Row Limit:</label>
+              <input
+                type="number"
+                min="1"
+                max={activeExplore?.max_row_limit || 5000}
+                value={rowLimit}
+                onChange={handleRowLimitChange}
+                style={{
+                  width: '75px',
+                  padding: '4px 6px',
+                  borderRadius: '4px',
+                  border: '1px solid #cbd5e1',
+                  fontSize: '12px'
+                }}
+              />
+            </div>
+          </div>
+
           <button
             onClick={handleAddFilter}
             style={{
               background: '#f1f5f9',
               border: '1px solid #cbd5e1',
               color: '#334155',
-              padding: '6px 14px',
+              padding: '5px 10px',
               borderRadius: '6px',
               fontSize: '12px',
               fontWeight: 600,
@@ -446,26 +338,20 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
           </button>
         </div>
 
-        {/* Filter Rows */}
-        {filters.length === 0 ? (
-          <p style={{ margin: 0, fontSize: '13px', color: '#94a3b8', fontStyle: 'italic' }}>
-            No active filters. Click "+ Add Filter" above to add filter criteria.
-          </p>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        {filters.length > 0 && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {filters.map(filter => (
-              <div key={filter.id} style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+              <div key={filter.id} style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <select
                   value={filter.field}
                   onChange={e => handleFilterChange(filter.id, 'field', e.target.value)}
                   style={{
                     flex: '1',
-                    padding: '8px 12px',
+                    padding: '6px 10px',
                     borderRadius: '6px',
                     border: '1px solid #cbd5e1',
-                    fontSize: '13px',
-                    background: '#f8fafc',
-                    color: '#0f172a'
+                    fontSize: '12px',
+                    background: '#f8fafc'
                   }}
                 >
                   <option value="">Select Field...</option>
@@ -477,28 +363,20 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
                 </select>
                 <input
                   type="text"
-                  placeholder="Filter expression (e.g. 7 days, >0, 123)"
+                  placeholder="Filter expression (e.g. 7 days, >0)"
                   value={filter.value}
                   onChange={e => handleFilterChange(filter.id, 'value', e.target.value)}
                   style={{
                     flex: '1.5',
-                    padding: '8px 12px',
+                    padding: '6px 10px',
                     borderRadius: '6px',
                     border: '1px solid #cbd5e1',
-                    fontSize: '13px'
+                    fontSize: '12px'
                   }}
                 />
                 <button
                   onClick={() => handleRemoveFilter(filter.id)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    color: '#ef4444',
-                    cursor: 'pointer',
-                    fontWeight: 'bold',
-                    padding: '6px',
-                    fontSize: '16px'
-                  }}
+                  style={{ background: 'none', border: 'none', color: '#ef4444', cursor: 'pointer', fontWeight: 'bold' }}
                 >
                   ✕
                 </button>
@@ -506,119 +384,60 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
             ))}
           </div>
         )}
+      </div>
 
-        {/* Row Limit & Execution Bar */}
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          borderTop: '1px solid #f1f5f9',
-          paddingTop: '16px',
-          marginTop: '6px',
-          flexWrap: 'wrap',
-          gap: '12px'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <label style={{ fontSize: '13px', fontWeight: 500, color: '#475569' }}>
-              Row Limit:
-            </label>
-            <input
-              type="number"
-              min="1"
-              max={activeExplore?.max_row_limit || 5000}
-              value={rowLimit}
-              onChange={handleRowLimitChange}
-              style={{
-                width: '90px',
-                padding: '6px 10px',
-                borderRadius: '6px',
-                border: '1px solid #cbd5e1',
-                fontSize: '13px'
-              }}
-            />
-            {activeExplore?.max_row_limit && (
+      {/* Results Area */}
+      <div style={{
+        background: 'white',
+        border: '1px solid #e2e8f0',
+        borderRadius: '8px',
+        padding: '14px 18px',
+        minHeight: '220px'
+      }}>
+        {/* Results Header */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: hasExecutedResults ? '14px' : '0', flexWrap: 'wrap', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600, color: '#0f172a' }}>
+              {activeResultTab === 'sql' ? 'SQL Preview' : 'Results'}
+            </h3>
+            {activeResultTab === 'table' && queryMeta && (
               <span style={{ fontSize: '12px', color: '#64748b' }}>
-                (Max cap: {activeExplore.max_row_limit})
+                {queryMeta.rowCount} row(s) (Limit: {queryMeta.limitApplied})
               </span>
             )}
           </div>
 
-          <div style={{ display: 'flex', gap: '10px' }}>
-            {activeExplore?.allow_csv_export && (
-              <button
-                onClick={handleExportCsv}
-                disabled={exportingCsv || runningQuery || selectedFields.length === 0}
-                style={{
-                  background: '#059669',
-                  color: 'white',
-                  border: 'none',
-                  padding: '9px 18px',
-                  borderRadius: '6px',
-                  fontSize: '13px',
-                  fontWeight: 600,
-                  cursor: selectedFields.length === 0 ? 'not-allowed' : 'pointer',
-                  opacity: selectedFields.length === 0 || exportingCsv ? 0.6 : 1,
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '6px'
-                }}
-              >
-                {exportingCsv ? 'Exporting...' : '📥 Export CSV'}
-              </button>
-            )}
-
-            <button
-              onClick={handleRunQuery}
-              disabled={runningQuery || selectedFields.length === 0}
-              style={{
-                background: '#2563eb',
-                color: 'white',
-                border: 'none',
-                padding: '9px 24px',
-                borderRadius: '6px',
-                fontSize: '13px',
-                fontWeight: 600,
-                cursor: selectedFields.length === 0 ? 'not-allowed' : 'pointer',
-                opacity: selectedFields.length === 0 || runningQuery ? 0.6 : 1,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px'
-              }}
-            >
-              {runningQuery ? 'Running Query...' : '▶ Run Query'}
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Results Table Section */}
-      <div style={{
-        background: 'white',
-        border: '1px solid #e2e8f0',
-        borderRadius: '12px',
-        padding: '18px 20px',
-        boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
-        minHeight: '260px'
-      }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
-          <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 600, color: '#0f172a' }}>
-            Query Results
-          </h3>
-          {queryMeta && (
-            <span style={{ fontSize: '12px', color: '#64748b' }}>
-              Returned {queryMeta.rowCount} row(s) (Limit applied: {queryMeta.limitApplied})
-            </span>
-          )}
+          {/* Action buttons in header (shown ONLY when results or SQL preview exist) */}
+          {hasExecutedResults && renderActionButtons('normal')}
         </div>
 
-        {runningQuery ? (
-          <div style={{ padding: '48px 0', textAlign: 'center', color: '#64748b' }}>
-            <div className="spinner" style={{ margin: '0 auto 12px auto' }}></div>
-            <p style={{ margin: 0, fontSize: '14px' }}>Executing query against Looker System Activity...</p>
+        {/* Results Body */}
+        {runningQuery || previewingSql ? (
+          <div style={{ padding: '36px 0', textAlign: 'center', color: '#64748b' }}>
+            <div className="spinner" style={{ margin: '0 auto 10px auto' }}></div>
+            <p style={{ margin: 0, fontSize: '13px' }}>{runningQuery ? 'Executing query...' : 'Generating SQL...'}</p>
           </div>
-        ) : queryResults && queryResults.length > 0 ? (
-          <div style={{ overflowX: 'auto', maxHeight: '440px' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '13px', textAlign: 'left' }}>
+        ) : activeResultTab === 'sql' && sqlPreview ? (
+          <div style={{ position: 'relative' }}>
+            <pre style={{
+              background: '#0f172a',
+              color: '#f8fafc',
+              padding: '16px',
+              borderRadius: '6px',
+              fontSize: '12px',
+              fontFamily: 'Consolas, Monaco, monospace',
+              overflowX: 'auto',
+              maxHeight: '400px',
+              margin: 0,
+              whiteSpace: 'pre-wrap',
+              wordBreak: 'break-word'
+            }}>
+              {sqlPreview}
+            </pre>
+          </div>
+        ) : activeResultTab === 'table' && queryResults && queryResults.length > 0 ? (
+          <div style={{ overflowX: 'auto', maxHeight: '400px' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'left' }}>
               <thead>
                 <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
                   {selectedFields.map(field => {
@@ -626,8 +445,8 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
                     const groupLabel = fieldObj?.group_label || activeExplore?.label || '';
                     const fieldLabel = fieldObj?.label || field;
                     return (
-                      <th key={field} style={{ padding: '10px 14px', fontWeight: 600, color: '#334155', whiteSpace: 'nowrap' }}>
-                        {groupLabel ? <div style={{ fontSize: '11px', color: '#64748b', fontWeight: 500 }}>{groupLabel}</div> : null}
+                      <th key={field} style={{ padding: '8px 10px', fontWeight: 600, color: '#334155', whiteSpace: 'nowrap' }}>
+                        {groupLabel ? <div style={{ fontSize: '10px', color: '#64748b', fontWeight: 500 }}>{groupLabel}</div> : null}
                         <div>{fieldLabel}</div>
                       </th>
                     );
@@ -638,7 +457,7 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
                 {queryResults.map((row, idx) => (
                   <tr key={idx} style={{ borderBottom: '1px solid #f1f5f9', background: idx % 2 === 0 ? 'white' : '#f8fafc' }}>
                     {selectedFields.map(field => (
-                      <td key={field} style={{ padding: '9px 14px', color: '#1e293b', whiteSpace: 'nowrap' }}>
+                      <td key={field} style={{ padding: '7px 10px', color: '#1e293b', whiteSpace: 'nowrap' }}>
                         {formatCellValue(row[field])}
                       </td>
                     ))}
@@ -647,20 +466,24 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
               </tbody>
             </table>
           </div>
-        ) : queryResults && queryResults.length === 0 ? (
-          <div style={{ padding: '40px 0', textAlign: 'center', color: '#94a3b8' }}>
-            <p style={{ margin: 0, fontSize: '14px' }}>No records returned matching query criteria.</p>
+        ) : activeResultTab === 'table' && queryResults && queryResults.length === 0 ? (
+          <div style={{ padding: '32px 0', textAlign: 'center', color: '#94a3b8' }}>
+            <p style={{ margin: 0, fontSize: '13px' }}>No records returned.</p>
           </div>
         ) : (
-          <div style={{ padding: '40px 0', textAlign: 'center', color: '#94a3b8' }}>
-            <p style={{ margin: 0, fontSize: '14px' }}>
-              Select fields and click <strong>"Run Query"</strong> to display system activity records.
-            </p>
+          /* Initial / Un-executed State: Primary action buttons in consistent order (Preview, Export, Run) */
+          <div style={{
+            padding: '48px 24px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center'
+          }}>
+            {renderActionButtons('large')}
           </div>
         )}
       </div>
 
-      {/* Full-Width Field Selection Modal (View C) */}
+      {/* Full-Width Field Selection Modal */}
       {showFieldPickerModal && (
         <div style={{
           position: 'fixed',
@@ -668,54 +491,47 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
           left: 0,
           right: 0,
           bottom: 0,
-          backgroundColor: 'rgba(15, 23, 42, 0.65)',
-          backdropFilter: 'blur(4px)',
+          backgroundColor: 'rgba(15, 23, 42, 0.6)',
+          backdropFilter: 'blur(3px)',
           zIndex: 1000,
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          padding: '24px'
+          padding: '20px'
         }}>
           <div style={{
             background: 'white',
-            borderRadius: '16px',
-            width: '92vw',
-            maxWidth: '1050px',
-            height: '85vh',
-            maxHeight: '780px',
+            borderRadius: '12px',
+            width: '90vw',
+            maxWidth: '1000px',
+            height: '82vh',
+            maxHeight: '740px',
             display: 'flex',
             flexDirection: 'column',
-            boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
             overflow: 'hidden'
           }}>
             {/* Modal Header */}
             <div style={{
-              padding: '20px 24px',
+              padding: '16px 20px',
               borderBottom: '1px solid #e2e8f0',
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
               background: '#f8fafc'
             }}>
-              <div>
-                <h2 style={{ margin: 0, fontSize: '18px', fontWeight: 600, color: '#0f172a' }}>
-                  Field Selection — {activeExplore?.label}
-                </h2>
-                <p style={{ margin: '2px 0 0 0', fontSize: '13px', color: '#64748b' }}>
-                  Search and toggle dimensions &amp; measures with full view and group context.
-                </p>
-              </div>
+              <h2 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: '#0f172a' }}>
+                Select Fields — {activeExplore?.label}
+              </h2>
 
               <button
                 onClick={handleCloseFieldPickerModal}
                 style={{
                   background: 'none',
                   border: 'none',
-                  fontSize: '20px',
+                  fontSize: '18px',
                   fontWeight: 'bold',
                   color: '#64748b',
-                  cursor: 'pointer',
-                  padding: '4px 8px'
+                  cursor: 'pointer'
                 }}
               >
                 ✕
@@ -724,38 +540,37 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
 
             {/* Modal Controls Bar */}
             <div style={{
-              padding: '16px 24px',
+              padding: '14px 20px',
               borderBottom: '1px solid #e2e8f0',
               display: 'flex',
               flexDirection: 'column',
-              gap: '12px',
+              gap: '10px',
               background: 'white'
             }}>
               <input
                 type="text"
-                placeholder="Search fields by label, view name, group label, or field ID..."
+                placeholder="Search fields by label, view, or technical name..."
                 value={modalSearchTerm}
                 onChange={e => setModalSearchTerm(e.target.value)}
                 style={{
                   width: '100%',
-                  padding: '10px 14px',
-                  borderRadius: '8px',
+                  padding: '8px 12px',
+                  borderRadius: '6px',
                   border: '1px solid #cbd5e1',
-                  fontSize: '14px',
+                  fontSize: '13px',
                   outline: 'none',
                   boxSizing: 'border-box'
                 }}
               />
 
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-                {/* Category Filter Tabs */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
                 <div style={{ display: 'flex', gap: '6px' }}>
                   <button
                     onClick={() => setModalCategoryFilter('all')}
                     style={{
-                      padding: '6px 14px',
-                      borderRadius: '6px',
-                      fontSize: '13px',
+                      padding: '5px 12px',
+                      borderRadius: '4px',
+                      fontSize: '12px',
                       fontWeight: 600,
                       border: '1px solid',
                       borderColor: modalCategoryFilter === 'all' ? '#2563eb' : '#cbd5e1',
@@ -764,14 +579,14 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
                       cursor: 'pointer'
                     }}
                   >
-                    All Fields ({allAvailableFields.length})
+                    All ({allAvailableFields.length})
                   </button>
                   <button
                     onClick={() => setModalCategoryFilter('dimensions')}
                     style={{
-                      padding: '6px 14px',
-                      borderRadius: '6px',
-                      fontSize: '13px',
+                      padding: '5px 12px',
+                      borderRadius: '4px',
+                      fontSize: '12px',
                       fontWeight: 600,
                       border: '1px solid',
                       borderColor: modalCategoryFilter === 'dimensions' ? '#2563eb' : '#cbd5e1',
@@ -785,9 +600,9 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
                   <button
                     onClick={() => setModalCategoryFilter('measures')}
                     style={{
-                      padding: '6px 14px',
-                      borderRadius: '6px',
-                      fontSize: '13px',
+                      padding: '5px 12px',
+                      borderRadius: '4px',
+                      fontSize: '12px',
                       fontWeight: 600,
                       border: '1px solid',
                       borderColor: modalCategoryFilter === 'measures' ? '#2563eb' : '#cbd5e1',
@@ -800,18 +615,10 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
                   </button>
                 </div>
 
-                {/* Bulk Actions */}
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button
-                    onClick={handleSelectAllVisibleModalFields}
-                    style={{ background: 'none', border: 'none', color: '#2563eb', fontSize: '13px', cursor: 'pointer', fontWeight: 600 }}
-                  >
-                    Select All Visible
-                  </button>
-                  <span style={{ color: '#cbd5e1' }}>|</span>
+                <div>
                   <button
                     onClick={handleClearModalFields}
-                    style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '13px', cursor: 'pointer' }}
+                    style={{ background: 'none', border: 'none', color: '#64748b', fontSize: '12px', cursor: 'pointer' }}
                   >
                     Clear All
                   </button>
@@ -820,18 +627,18 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
             </div>
 
             {/* Modal Body: Disambiguated Grid */}
-            <div style={{ flex: 1, padding: '20px 24px', overflowY: 'auto', background: '#f8fafc' }}>
+            <div style={{ flex: 1, padding: '16px 20px', overflowY: 'auto', background: '#f8fafc' }}>
               {loadingFields ? (
-                <div style={{ padding: '48px 0', textAlign: 'center', color: '#64748b' }}>
-                  <div className="spinner" style={{ margin: '0 auto 12px auto' }}></div>
-                  <p style={{ margin: 0, fontSize: '14px' }}>Loading explore field dictionary...</p>
+                <div style={{ padding: '36px 0', textAlign: 'center', color: '#64748b' }}>
+                  <div className="spinner" style={{ margin: '0 auto 10px auto' }}></div>
+                  <p style={{ margin: 0, fontSize: '13px' }}>Loading fields...</p>
                 </div>
               ) : filteredModalFields.length === 0 ? (
-                <div style={{ padding: '48px 0', textAlign: 'center', color: '#94a3b8' }}>
-                  <p style={{ margin: 0, fontSize: '14px' }}>No fields match search filter "{modalSearchTerm}".</p>
+                <div style={{ padding: '36px 0', textAlign: 'center', color: '#94a3b8' }}>
+                  <p style={{ margin: 0, fontSize: '13px' }}>No fields match "{modalSearchTerm}".</p>
                 </div>
               ) : (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(310px, 1fr))', gap: '12px' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(290px, 1fr))', gap: '10px' }}>
                   {filteredModalFields.map(f => {
                     const isSelected = selectedFields.includes(f.name);
                     const viewGroupLabel = f.group_label || activeExplore?.label || 'Field';
@@ -843,40 +650,40 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
                           background: isSelected ? '#eff6ff' : 'white',
                           border: '1px solid',
                           borderColor: isSelected ? '#3b82f6' : '#e2e8f0',
-                          borderRadius: '8px',
-                          padding: '12px 14px',
+                          borderRadius: '6px',
+                          padding: '10px 12px',
                           cursor: 'pointer',
                           display: 'flex',
                           alignItems: 'flex-start',
-                          gap: '12px',
+                          gap: '10px',
                           transition: 'all 0.15s ease'
                         }}
                       >
                         <input
                           type="checkbox"
                           checked={isSelected}
-                          onChange={() => {}} // Handled by parent div onClick
-                          style={{ marginTop: '3px', cursor: 'pointer' }}
+                          onChange={() => {}}
+                          style={{ marginTop: '2px', cursor: 'pointer' }}
                         />
                         <div style={{ flex: 1, minWidth: 0 }}>
-                          <div style={{ fontSize: '11px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', marginBottom: '2px' }}>
+                          <div style={{ fontSize: '10px', fontWeight: 600, color: '#64748b', textTransform: 'uppercase', marginBottom: '1px' }}>
                             {viewGroupLabel}
                           </div>
-                          <div style={{ fontSize: '14px', fontWeight: 600, color: isSelected ? '#1d4ed8' : '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                          <div style={{ fontSize: '13px', fontWeight: 600, color: isSelected ? '#1d4ed8' : '#0f172a', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {f.label}
                           </div>
-                          <div style={{ fontSize: '12px', color: '#94a3b8', marginTop: '2px', fontFamily: 'monospace' }}>
+                          <div style={{ fontSize: '11px', color: '#94a3b8', fontFamily: 'monospace' }}>
                             {f.name}
                           </div>
                         </div>
 
                         {f.is_date && (
-                          <span style={{ fontSize: '10px', background: '#e0f2fe', color: '#0369a1', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                          <span style={{ fontSize: '10px', background: '#e0f2fe', color: '#0369a1', padding: '1px 5px', borderRadius: '3px', fontWeight: 600 }}>
                             Date
                           </span>
                         )}
                         {f.category === 'measure' && (
-                          <span style={{ fontSize: '10px', background: '#dcfce7', color: '#15803d', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>
+                          <span style={{ fontSize: '10px', background: '#dcfce7', color: '#15803d', padding: '1px 5px', borderRadius: '3px', fontWeight: 600 }}>
                             Measure
                           </span>
                         )}
@@ -889,27 +696,27 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
 
             {/* Modal Footer */}
             <div style={{
-              padding: '16px 24px',
+              padding: '12px 20px',
               borderTop: '1px solid #e2e8f0',
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
               background: 'white'
             }}>
-              <span style={{ fontSize: '13px', color: '#475569', fontWeight: 500 }}>
-                <strong>{selectedFields.length}</strong> field(s) selected
+              <span style={{ fontSize: '12px', color: '#475569', fontWeight: 500 }}>
+                {selectedFields.length} selected
               </span>
 
-              <div style={{ display: 'flex', gap: '12px' }}>
+              <div style={{ display: 'flex', gap: '8px' }}>
                 <button
                   onClick={handleCloseFieldPickerModal}
                   style={{
                     background: 'white',
                     border: '1px solid #cbd5e1',
                     color: '#475569',
-                    padding: '8px 18px',
+                    padding: '6px 14px',
                     borderRadius: '6px',
-                    fontSize: '13px',
+                    fontSize: '12px',
                     fontWeight: 600,
                     cursor: 'pointer'
                   }}
@@ -922,14 +729,14 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
                     background: '#2563eb',
                     border: 'none',
                     color: 'white',
-                    padding: '8px 20px',
+                    padding: '6px 16px',
                     borderRadius: '6px',
-                    fontSize: '13px',
+                    fontSize: '12px',
                     fontWeight: 600,
                     cursor: 'pointer'
                   }}
                 >
-                  Apply Selection ({selectedFields.length})
+                  Apply ({selectedFields.length})
                 </button>
               </div>
             </div>
@@ -946,22 +753,96 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
 
   function handleExploreChangeEffect() {
     if (selectedExploreName) {
+      setSelectedFields([]);
+      setFilters([]);
+      resetQueryState();
       fetchExploreFields(selectedExploreName);
     }
   }
 
-  function handlePickExplore(exploreName: string) {
-    setSelectedExploreName(exploreName);
+  function renderActionButtons(size: 'normal' | 'large' = 'normal') {
+    const isLarge = size === 'large';
+    const padding = isLarge ? '10px 20px' : '6px 14px';
+    const fontSize = isLarge ? '14px' : '12px';
+
+    return (
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+        {/* 1. Preview SQL */}
+        <button
+          onClick={handlePreviewSql}
+          disabled={previewingSql || runningQuery || selectedFields.length === 0}
+          style={{
+            background: '#f1f5f9',
+            border: '1px solid #cbd5e1',
+            color: '#334155',
+            padding,
+            borderRadius: '6px',
+            fontSize,
+            fontWeight: 600,
+            cursor: selectedFields.length === 0 ? 'not-allowed' : 'pointer',
+            opacity: selectedFields.length === 0 || previewingSql ? 0.6 : 1
+          }}
+        >
+          {previewingSql ? 'Generating SQL...' : '👁️ Preview SQL'}
+        </button>
+
+        {/* 2. Export CSV */}
+        {activeExplore?.allow_csv_export && (
+          <button
+            onClick={handleExportCsv}
+            disabled={exportingCsv || runningQuery || selectedFields.length === 0}
+            style={{
+              background: '#059669',
+              color: 'white',
+              border: 'none',
+              padding,
+              borderRadius: '6px',
+              fontSize,
+              fontWeight: 600,
+              cursor: selectedFields.length === 0 ? 'not-allowed' : 'pointer',
+              opacity: selectedFields.length === 0 || exportingCsv ? 0.6 : 1
+            }}
+          >
+            {exportingCsv ? 'Exporting...' : '📥 Export CSV'}
+          </button>
+        )}
+
+        {/* 3. Run Query */}
+        <button
+          onClick={handleRunQuery}
+          disabled={runningQuery || selectedFields.length === 0}
+          style={{
+            background: '#2563eb',
+            color: 'white',
+            border: 'none',
+            padding,
+            borderRadius: '6px',
+            fontSize,
+            fontWeight: 600,
+            cursor: selectedFields.length === 0 ? 'not-allowed' : 'pointer',
+            opacity: selectedFields.length === 0 || runningQuery ? 0.6 : 1,
+            boxShadow: isLarge ? '0 2px 4px rgba(37, 99, 235, 0.2)' : 'none'
+          }}
+        >
+          {runningQuery ? 'Running Query...' : '▶ Run Query'}
+        </button>
+      </div>
+    );
+  }
+
+  function resetQueryState() {
     setQueryResults(null);
+    setSqlPreview(null);
+    setActiveResultTab('table');
     setQueryMeta(null);
     setErrorMsg(null);
   }
 
-  function handleChangeExplore() {
-    setSelectedExploreName('');
-    setQueryResults(null);
-    setQueryMeta(null);
-    setErrorMsg(null);
+  function handlePickExplore(exploreName: string) {
+    if (onNavigateSubRoute) {
+      onNavigateSubRoute(exploreName);
+    }
+    resetQueryState();
   }
 
   function handleOpenFieldPickerModal() {
@@ -974,40 +855,42 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
 
   function handleRemoveSelectedField(fieldName: string) {
     setSelectedFields(prev => prev.filter(f => f !== fieldName));
+    resetQueryState();
   }
 
   function handleToggleField(fieldName: string) {
     setSelectedFields(prev =>
       prev.includes(fieldName) ? prev.filter(f => f !== fieldName) : [...prev, fieldName]
     );
-  }
-
-  function handleSelectAllVisibleModalFields() {
-    const visibleNames = filteredModalFields.map(f => f.name);
-    setSelectedFields(prev => Array.from(new Set([...prev, ...visibleNames])));
+    resetQueryState();
   }
 
   function handleClearModalFields() {
     setSelectedFields([]);
+    resetQueryState();
   }
 
   function handleAddFilter() {
     const defaultField = allAvailableFields.length > 0 ? allAvailableFields[0].name : '';
     setFilters(prev => [...prev, { id: String(Date.now()), field: defaultField, value: '' }]);
+    resetQueryState();
   }
 
   function handleRemoveFilter(id: string) {
     setFilters(prev => prev.filter(f => f.id !== id));
+    resetQueryState();
   }
 
   function handleFilterChange(id: string, key: 'field' | 'value', val: string) {
     setFilters(prev =>
       prev.map(f => (f.id === id ? { ...f, [key]: val } : f))
     );
+    resetQueryState();
   }
 
   function handleRowLimitChange(e: React.ChangeEvent<HTMLInputElement>) {
     setRowLimit(Number(e.target.value));
+    resetQueryState();
   }
 
   function handleClearError() {
@@ -1022,14 +905,33 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
       const data = await callBackend('get_explores');
       const loadedExplores = data?.explores || [];
       setExplores(loadedExplores);
-      if (loadedExplores.length > 0) {
-        setSelectedExploreName(loadedExplores[0].name);
-      }
     } catch (err: any) {
       setErrorMsg(err.message || 'Failed to fetch explores.');
     } finally {
       setLoadingExplores(false);
     }
+  }
+
+  function normalizeExploreConfig(rawConfig: any, exploreName?: string): any {
+    if (!rawConfig) return { name: exploreName || '' };
+    const name = rawConfig.name || exploreName || '';
+    let required_filter_fields: string[] = [];
+
+    if (Array.isArray(rawConfig.required_filter_fields) && rawConfig.required_filter_fields.length > 0) {
+      required_filter_fields = rawConfig.required_filter_fields;
+    } else if (Array.isArray(rawConfig.required_date_filter_fields) && rawConfig.required_date_filter_fields.length > 0) {
+      required_filter_fields = rawConfig.required_date_filter_fields;
+    } else if (typeof rawConfig.required_date_filter_field === 'string' && rawConfig.required_date_filter_field.trim()) {
+      required_filter_fields = [rawConfig.required_date_filter_field.trim()];
+    } else if (rawConfig.require_date_filter) {
+      required_filter_fields = [`${name || 'history'}.created_time`];
+    }
+
+    return {
+      ...rawConfig,
+      name,
+      required_filter_fields
+    };
   }
 
   async function fetchExploreFields(exploreName: string) {
@@ -1042,10 +944,40 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
       const meas = data?.fields?.measures || [];
       setFields({ dimensions: dims, measures: meas });
 
-      // Auto-select initial 3 dimensions for convenience if none currently selected
-      if (selectedFields.length === 0) {
-        const defaultSelected = dims.slice(0, 3).map((d: any) => d.name);
-        setSelectedFields(defaultSelected);
+      // Check for required date filter fields configured for this explore
+      const rawCfg = data?.explore_config ||
+        (parameters?.explores || []).find((e: any) => e.name === exploreName) ||
+        explores.find((e: any) => e.name === exploreName);
+
+      const exploreCfg = normalizeExploreConfig(rawCfg, exploreName);
+      const reqFields: string[] = exploreCfg?.required_filter_fields || [];
+
+      if (reqFields.length > 0) {
+        // Target field to auto-add as initial default filter
+        const targetDateDim = dims.find((d: any) => reqFields.includes(d.name)) ||
+          dims.find((d: any) => d.name === reqFields[0]) ||
+          dims[0];
+
+        if (targetDateDim) {
+          setFilters(prevFilters => {
+            const hasRequiredFilter = prevFilters.some(f => {
+              return reqFields.some(reqField => {
+                if (f.field === reqField) return true;
+                const parts = reqField.split('.');
+                if (parts.length === 2) {
+                  const groupPrefix = `${parts[0]}.${parts[1].split('_')[0]}_`;
+                  if (String(f.field || '').startsWith(groupPrefix)) return true;
+                }
+                return false;
+              });
+            });
+
+            if (!hasRequiredFilter) {
+              return [{ id: String(Date.now()), field: targetDateDim.name, value: '7 days' }];
+            }
+            return prevFilters;
+          });
+        }
       }
     } catch (err: any) {
       setErrorMsg(err.message || `Failed to fetch fields for explore '${exploreName}'.`);
@@ -1062,8 +994,6 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
 
     setRunningQuery(true);
     setErrorMsg(null);
-    setQueryResults(null);
-    setQueryMeta(null);
 
     const formattedFilters: Record<string, string> = {};
     filters.forEach(f => {
@@ -1082,6 +1012,8 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
       });
 
       setQueryResults(result?.rows || []);
+      setActiveResultTab('table');
+      setSqlPreview(null);
       setQueryMeta({
         rowCount: result?.row_count || 0,
         limitApplied: result?.limit_applied || rowLimit
@@ -1090,6 +1022,40 @@ export const LimitedSystemActivityWorkflow: React.FC<WorkflowComponentProps> = (
       setErrorMsg(err.message || 'Query execution failed.');
     } finally {
       setRunningQuery(false);
+    }
+  }
+
+  async function handlePreviewSql() {
+    if (selectedFields.length === 0) {
+      setErrorMsg('Please select at least one field before previewing SQL.');
+      return;
+    }
+
+    setPreviewingSql(true);
+    setErrorMsg(null);
+
+    const formattedFilters: Record<string, string> = {};
+    filters.forEach(f => {
+      if (f.field && f.value) {
+        formattedFilters[f.field] = f.value;
+      }
+    });
+
+    try {
+      addLog(`Requesting SQL preview for system__activity explore '${selectedExploreName}'...`);
+      const result = await callBackend('preview_sql', {
+        explore_name: selectedExploreName,
+        fields: selectedFields,
+        filters: formattedFilters,
+        limit: rowLimit
+      });
+
+      setSqlPreview(result?.sql || '');
+      setActiveResultTab('sql');
+    } catch (err: any) {
+      setErrorMsg(err.message || 'SQL preview failed.');
+    } finally {
+      setPreviewingSql(false);
     }
   }
 

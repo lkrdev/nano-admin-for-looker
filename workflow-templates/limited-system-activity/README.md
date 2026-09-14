@@ -7,7 +7,7 @@ This workflow template allows Nano Admin to expose a controlled slice of Looker'
 - **AllowList of Explores**: Restricts user access strictly to configured explores under `system__activity`.
 - **Explore-specific CSV Export**: Optional CSV export button per explore.
 - **Performance Presets**:
-  - `require_date_filter`: Mandates a filter on a date/time field before query execution to prevent unindexed full scans.
+  - `required_filter_fields`: Array of specific field(s) required to be filtered before query execution (e.g. `["history.created_time"]`).
   - `max_row_limit`: Automatically caps query row limits.
 - **Enforced User ID Filtering**:
   - Automatically injects the appropriate user ID filter field into all executed queries based on:
@@ -49,7 +49,8 @@ parameters:
   explores:
     - name: "history"
       allow_csv_export: true
-      require_date_filter: true
+      required_filter_fields:
+        - "history.created_time"
       max_row_limit: 500
     - name: "dashboard"
       allow_csv_export: false

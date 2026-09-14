@@ -58,7 +58,8 @@ workflows:
       explores:
         - name: "history"
           allow_csv_export: true
-          require_date_filter: true
+          required_filter_fields:
+            - "history.created_time"
           max_row_limit: 500
         - name: "user"
           allow_csv_export: false
