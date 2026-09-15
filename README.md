@@ -70,28 +70,28 @@ To maintain high security when performing administrative operations from an ifra
              | -- 1. API Request with Challenge ------>| (Injects user attribute secret)     |
              |                                         | ----------------------------------->| (Verifies HMAC signature)
              |                                         |                                     |
-             | <--- 2. 401 Unauthorized (Expired) <------------------------------------------| (Signature fails or expired)
+             |                                         | <--- 2. Refresh user attribute -----| (Signature fails or expired;
+             |                                         |         secret via Admin API        |  generates new challenge token
+             |                                         |                                     |  & writes to Looker database)
+             | <--- 3. 401 Unauthorized (Challenge) <---------------------------------------| 
              |                                         |                                     |
-             |                                         | <--- 3. Refresh user attribute -----| (Generates new challenge;
-             |                                         |         secret via Admin API        |  writes to Looker user database)
-             |                                         |                                     |
-             | -- 4. Retries request ----------------->| (Injects new user attribute secret) |
+             | -- 4. Retries request ----------------->| (Injects newly provisioned secret)  |
              |                                         | ----------------------------------->| (Validates HMAC signature)
              |                                         |                                     |
              | <--- 5. 200 OK (Authenticated Data) <-----------------------------------------| (Succeeds)
 ```
 
 ### 1. Header Injection
-The frontend routes requests through Looker's server proxy with the header `X-Nano-Admin-Challenge: extensionSDK.createSecretKeyTag('nano_admin_challenge')`. Looker intercepts this and replaces the placeholder with the current user's actual `nano_admin_challenge` attribute value.
+The frontend routes requests through Looker's server proxy with the header `Authorization: looker-attribute-challenge extensionSDK.createSecretKeyTag('nano_admin_challenge')`. Looker intercepts this and replaces the placeholder with the current user's actual `nano_admin_challenge` attribute value.
 
-### 2. Validation & Refresh
-The GCF backend verifies that the challenge timestamp is recent (within 2 minutes) and matches the signature generated using the secret `GCF_HMAC_SECRET`. If the challenge is invalid or expired:
-* The backend generates a fresh challenge signature.
-* Writes it directly to the user's `nano_admin_challenge` attribute in Looker via Looker's Node SDK.
-* Returns `401 Unauthorized (challenge_required)`.
+### 2. Validation & Refresh Handshake
+The GCF backend verifies that the challenge timestamp is within the 8-hour session window and matches the signature generated using `GCF_HMAC_SECRET`. If the challenge is invalid or expired:
+* The backend generates a fresh challenge signature and writes it to the user's `nano_admin_challenge` attribute in Looker via Looker's Node SDK.
+* After the user attribute write is complete, the backend returns `401 Unauthorized (challenge_required)`.
+* For active sessions older than 1 hour, the backend asynchronously performs a sliding background refresh without interrupting the user.
 
-### 3. Automatic Retry
-The frontend intercepts the `401` status code and transparently retries the request. In the retry, Looker injects the newly written user attribute, and the handshake succeeds.
+### 3. Transparent Retry
+The frontend intercepts the `401` status code and transparently retries the request. In the retry, Looker injects the newly written user attribute value, and the handshake succeeds.
 
 ---
 

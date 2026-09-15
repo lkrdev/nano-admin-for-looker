@@ -829,6 +829,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
         addLog(`Challenge required or expired. Retrying backend action '${action}'...`);
         const errData = response.body;
         checkBuildHash(errData);
+        await new Promise((resolve) => setTimeout(resolve, 300));
         response = await extensionSDK.serverProxy(BACKEND_URL, {
           method: 'POST',
           headers,
@@ -984,6 +985,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
         addLog('Challenge required or expired. Retrying workflows fetch...');
         const errData = response.body;
         checkBuildHash(errData);
+        await new Promise((resolve) => setTimeout(resolve, 300));
         response = await extensionSDK.serverProxy(BACKEND_URL, {
           method: 'POST',
           headers,
@@ -1053,6 +1055,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
         addLog('Challenge required or expired. Retrying workflow execution...');
         const errData = response.body;
         checkBuildHash(errData);
+        await new Promise((resolve) => setTimeout(resolve, 300));
         response = await extensionSDK.serverProxy(BACKEND_URL, {
           method: 'POST',
           headers,
