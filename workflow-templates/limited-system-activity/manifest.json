@@ -39,23 +39,22 @@
       "type": "object",
       "description": "Limitation enforcing filtering queries by user ID",
       "properties": {
-        "enabled": {
-          "type": "boolean",
-          "description": "Whether user ID limitation is active"
-        },
         "mode": {
           "type": "string",
           "enum": [
-            "own",
-            "tenant_groups"
+            "self",
+            "scope_groups",
+            "none"
           ],
-          "description": "'own' filters to the current user's ID; 'tenant_groups' filters to user IDs in tenant groups where configured user attribute is 'yes'"
+          "default": "self",
+          "description": "'self' (default) filters to the invoking user's ID; 'scope_groups' filters to user IDs in scope groups where configured user attribute is 'yes'; 'none' applies no user ID filtering"
         },
         "attribute_name": {
           "type": "string",
-          "description": "User attribute name set on groups for tenant group matching (default: 'tenant')"
+          "description": "User attribute name set on groups for scope group matching (default: 'nano_admin_is_workflow_scope_group')"
         }
       }
     }
   }
 }
+

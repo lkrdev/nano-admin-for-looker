@@ -52,6 +52,17 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
   }
 }
 
+const templateComponentCache: Record<string, React.LazyExoticComponent<React.ComponentType<any>>> = {};
+
+function getTemplateComponent(template: string): React.LazyExoticComponent<React.ComponentType<any>> {
+  if (!templateComponentCache[template]) {
+    templateComponentCache[template] = React.lazy(
+      () => import(`./workflow-templates/${template}/frontend`) as any
+    );
+  }
+  return templateComponentCache[template];
+}
+
 interface WorkflowLoaderProps {
   workflow: any;
   subRoute?: string | null;
@@ -71,17 +82,14 @@ const WorkflowLoader: React.FC<WorkflowLoaderProps> = ({
   callWorkflowBackend,
   onNavigateSubRoute
 }) => {
-  const LazyComponent = React.useMemo(() => {
-    const template = workflow.template;
-    return React.lazy(() => import(`./workflow-templates/${template}/frontend`) as any);
-  }, [workflow.template]);
+  const LazyComponent = getTemplateComponent(workflow.template);
 
   const handleCallBackend = (action: string, payload?: any) => {
     return callWorkflowBackend(workflow.id, action, payload);
   };
 
   return (
-    <React.Suspense fallback={<div>Loading workflow interface...</div>}>
+    <React.Suspense fallback={<div style={{ padding: '24px', textAlign: 'center', color: '#64748b' }}>Loading workflow interface...</div>}>
       <LazyComponent
         workflowId={workflow.id}
         label={workflow.label}
@@ -310,7 +318,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
           <nav className="workflow-nav-bar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '15px' }}>
               <button
-                onClick={handleBackToNanoAdmin}
+                onClick={() => navigateTo('/')}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -326,7 +334,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
               <span style={{ color: 'var(--text-muted)' }}>/</span>
               {activeSubRoute ? (
                 <button
-                  onClick={() => handleNavigateToWorkflow(activeWorkflow.id, '')}
+                  onClick={() => navigateTo(`/${activeWorkflow.id}`)}
                   style={{
                     background: 'none',
                     border: 'none',
@@ -383,13 +391,14 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
           <div className="page-workflow-container">
             <ErrorBoundary>
               <WorkflowLoader
+                key={activeWorkflow.id}
                 workflow={activeWorkflow}
                 subRoute={activeSubRoute}
                 coreSDK={coreSDK}
                 extensionSDK={extensionSDK}
                 addLog={addLog}
                 callWorkflowBackend={callWorkflowBackend}
-                onNavigateSubRoute={(subPath) => handleNavigateToWorkflow(activeWorkflow.id, subPath)}
+                onNavigateSubRoute={(subPath) => navigateTo(`/${activeWorkflow.id}/${subPath}`)}
               />
             </ErrorBoundary>
           </div>
@@ -491,7 +500,7 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
                       </p>
                       <button
                         className="btn btn-primary"
-                        onClick={() => handleNavigateToWorkflow(workflow.id)}
+                        onClick={() => navigateTo(`/${workflow.id}`)}
                         style={{ alignSelf: 'flex-start', marginTop: '12px' }}
                       >
                         Open Workflow →
@@ -725,59 +734,21 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
   }
 
   function resolveCurrentRoute(): { workflowId: string | null; subRoute: string | null } {
-    const sdkRoute = (extensionSDK as any)?.lookerHostData?.route || (extensionSDK as any)?.route;
-    const hashRoute = window.location.hash;
-    const pathRoute = window.location.pathname;
-
-    const rawRoute = sdkRoute || hashRoute || pathRoute || '';
-    const cleanRoute = rawRoute
-      .replace(/^#\/?/, '')
-      .replace(/^\/?/, '')
-      .replace(/^extensions\/[^\/]+\/?/, '')
-      .split('?')[0]
-      .split('#')[0];
-
-    if (!cleanRoute) {
-      return { workflowId: null, subRoute: null };
-    }
-
-    const parts = cleanRoute.split('/');
-    return {
-      workflowId: parts[0] || null,
-      subRoute: parts.slice(1).join('/') || null
-    };
+    const rawRoute = (extensionSDK as any)?.lookerHostData?.route || (extensionSDK as any)?.route || '/';
+    return parseWorkflowRoute(rawRoute);
   }
 
   function handleHistorySync() {
-    const handleRouteChange = () => {
+    if (workflows.length > 0) {
       const { workflowId, subRoute } = resolveCurrentRoute();
-      if (!workflowId) {
-        setActiveWorkflowId(null);
-        setActiveSubRoute(null);
-      } else {
+      if (workflowId) {
         const matchingWf = workflows.find(w => w.id === workflowId);
         if (matchingWf) {
           setActiveWorkflowId(matchingWf.id);
           setActiveSubRoute(subRoute || null);
-        } else {
-          setActiveWorkflowId(null);
-          setActiveSubRoute(null);
         }
       }
-    };
-
-    window.addEventListener('popstate', handleRouteChange);
-    window.addEventListener('hashchange', handleRouteChange);
-
-    // Initial route resolution on reload or load
-    if (workflows.length > 0) {
-      handleRouteChange();
     }
-
-    return () => {
-      window.removeEventListener('popstate', handleRouteChange);
-      window.removeEventListener('hashchange', handleRouteChange);
-    };
   }
 
   function handleToggleDropdown() {
@@ -890,29 +861,16 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
     }
   }
 
-  function handleNavigateToWorkflow(workflowId: string, subPath: string = '') {
-    const routePath = subPath ? `/${workflowId}/${subPath}` : `/${workflowId}`;
-    const hashUrl = `#${routePath}`;
-
-    if (window.location.hash !== hashUrl) {
-      window.location.hash = hashUrl;
-    }
+  function navigateTo(targetPath: string = '/') {
+    const { workflowId, subRoute } = parseWorkflowRoute(targetPath);
     if (extensionSDK?.clientRouteChanged) {
-      extensionSDK.clientRouteChanged(routePath);
+      const sdkPath = workflowId
+        ? (subRoute ? `/${workflowId}/${subRoute}` : `/${workflowId}`)
+        : '/';
+      extensionSDK.clientRouteChanged(sdkPath);
     }
     setActiveWorkflowId(workflowId);
-    setActiveSubRoute(subPath || null);
-  }
-
-  function handleBackToNanoAdmin() {
-    if (window.location.hash !== '' && window.location.hash !== '#/') {
-      window.location.hash = '#/';
-    }
-    if (extensionSDK?.clientRouteChanged) {
-      extensionSDK.clientRouteChanged('/');
-    }
-    setActiveWorkflowId(null);
-    setActiveSubRoute(null);
+    setActiveSubRoute(subRoute);
   }
 
   function handleOpenIdeConfig() {
@@ -1130,5 +1088,33 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
     }
   }
 };
+
+export function parseWorkflowRoute(rawRoute: string): { workflowId: string | null; subRoute: string | null } {
+  if (!rawRoute || typeof rawRoute !== 'string') {
+    return { workflowId: null, subRoute: null };
+  }
+
+  const cleanRoute = rawRoute
+    .split('?')[0]
+    .split('#')[0]
+    .replace(/^https?:\/\/[^\/]+/, '')
+    .replace(/^\/?/, '')
+    .replace(/^extensions\/[^\/]+\/?/, '')
+    .trim();
+
+  if (!cleanRoute) {
+    return { workflowId: null, subRoute: null };
+  }
+
+  const parts = cleanRoute.split('/').filter(Boolean);
+  if (parts.length === 0) {
+    return { workflowId: null, subRoute: null };
+  }
+
+  return {
+    workflowId: parts[0],
+    subRoute: parts.length > 1 ? parts.slice(1).join('/') : null
+  };
+}
 
 export default App;

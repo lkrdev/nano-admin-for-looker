@@ -11,14 +11,15 @@ This workflow template allows Nano Admin to expose a controlled slice of Looker'
   - `max_row_limit`: Automatically caps query row limits.
 - **Enforced User ID Filtering**:
   - Automatically injects the appropriate user ID filter field into all executed queries based on:
-    - `"own"`: Filters to the current user's Looker User ID.
-    - `"tenant_groups"`: Filters to all user IDs belonging to group(s) the current user is in that have the specified user attribute (default: `tenant`) set to `"yes"`.
+    - `"self"` (default): Filters to the invoking user's Looker User ID.
+    - `"scope_groups"`: Filters to all user IDs belonging to scope group(s) the current user is in that have the specified user attribute (default: `nano_admin_is_workflow_scope_group`) set to `"yes"`.
+    - `"none"`: Applies no user ID filtering.
 
 ---
 
 ## Canonical User ID Field Mapping Table
 
-When `user_id_limitation` is enabled, queries against each `system__activity` explore are automatically filtered using the corresponding canonical dimension field listed below:
+When `user_id_limitation` is configured, queries against each `system__activity` explore are automatically filtered using the corresponding canonical dimension field listed below:
 
 | Explore Name | Canonical User ID Filter Field | Description |
 | :--- | :--- | :--- |
@@ -56,7 +57,6 @@ parameters:
       allow_csv_export: false
       max_row_limit: 200
   user_id_limitation:
-    enabled: true
-    mode: "tenant_groups" # "own" or "tenant_groups"
-    attribute_name: "tenant"
+    mode: "scope_groups" # "self" (default), "scope_groups", or "none"
+    attribute_name: "nano_admin_is_workflow_scope_group"
 ```

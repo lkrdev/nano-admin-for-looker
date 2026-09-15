@@ -69,5 +69,15 @@ workflows:
           max_row_limit: 100
       user_id_limitation:
         enabled: true
-        mode: "tenant_groups"
-        attribute_name: "tenant"
+        mode: "scope_groups"
+        attribute_name: "nano_admin_is_workflow_scope_group"
+
+  - id: "workflow-groups-manager"
+    label: "Workflow Groups Manager"
+    description: "Audit and administer Looker Scope Groups and Workflow Access."
+    template: "workflow-groups-manager"
+    authorized_groups:
+      - "1"
+    parameters:
+      default_attribute_name: "nano_admin_is_workflow_scope_group"
+

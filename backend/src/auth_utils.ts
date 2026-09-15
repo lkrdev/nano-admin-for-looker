@@ -111,23 +111,23 @@ export async function isUserAuthorized(sdk: any, userId: string, identifier: str
 }
 
 /**
- * Resolves all Looker user IDs for tenant group(s) that a given user belongs to.
+ * Resolves all Looker user IDs for Scope Group(s) that a given user belongs to.
  * Finds groups of the user that have the specified user attribute set to "yes".
  * Returns an array of string user IDs.
  */
-export async function getTenantUserIds(
+export async function getScopeGroupUserIds(
   sdk: any,
   userId: string,
-  attributeName: string = 'tenant'
+  attributeName: string = 'nano_admin_is_workflow_scope_group'
 ): Promise<string[]> {
-  console.log(`Resolving tenant user IDs for user ${userId} with attribute "${attributeName}"...`);
+  console.log(`Resolving scope group user IDs for user ${userId} with attribute "${attributeName}"...`);
 
   const userGroupIds = await getUserGroups(sdk, userId);
   if (!userGroupIds || userGroupIds.length === 0) {
     return [];
   }
 
-  const allAttributes = await sdk.ok(sdk.all_user_attributes());
+  const allAttributes = await sdk.ok(sdk.all_user_attributes({}));
   const targetAttr = (allAttributes || []).find((attr: any) => attr.name === attributeName);
   if (!targetAttr) {
     console.warn(`User attribute "${attributeName}" not found in Looker instance.`);
@@ -145,22 +145,31 @@ export async function getTenantUserIds(
     return [];
   }
 
-  const tenantUserIdSet = new Set<string>();
+  const scopeUserIdSet = new Set<string>();
   for (const groupId of matchingGroupIds) {
     try {
-      const groupUsers = await sdk.ok(sdk.all_group_users(groupId, { fields: 'id' }));
+      const groupUsers = await sdk.ok(sdk.all_group_users({ group_id: groupId, fields: 'id' }));
       (groupUsers || []).forEach((u: any) => {
         if (u.id !== undefined && u.id !== null) {
-          tenantUserIdSet.add(String(u.id));
+          scopeUserIdSet.add(String(u.id));
         }
       });
     } catch (err: any) {
-      console.error(`Failed to fetch users for tenant group ${groupId}:`, err);
+      console.error(`Failed to fetch users for scope group ${groupId}:`, err);
     }
   }
 
-  return Array.from(tenantUserIdSet);
+  return Array.from(scopeUserIdSet);
 }
+
+export async function getTenantUserIds(
+  sdk: any,
+  userId: string,
+  attributeName: string = 'nano_admin_is_workflow_scope_group'
+): Promise<string[]> {
+  return await getScopeGroupUserIds(sdk, userId, attributeName);
+}
+
 
 
 function fetchRawText(urlStr: string, headers: any): Promise<string> {
