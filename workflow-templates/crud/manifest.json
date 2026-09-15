@@ -29,6 +29,26 @@
           }
         }
       }
+    },
+    "user_id_limitation": {
+      "type": "object",
+      "description": "Limitation enforcing user ID scoping across CRUD operations",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "self",
+            "scope_groups",
+            "none"
+          ],
+          "default": "self",
+          "description": "'self' (default) restricts to invoking user ID; 'scope_groups' restricts to user IDs in active scope groups; 'none' applies no user ID scoping"
+        },
+        "attribute_name": {
+          "type": "string",
+          "description": "User attribute name set on groups for scope group matching (default: 'nano_admin_is_workflow_scope_group')"
+        }
+      }
     }
   }
 }

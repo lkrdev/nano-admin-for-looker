@@ -7,6 +7,9 @@ workflows:
       - "3"
     parameters:
       target_object: "users"
+      user_id_limitation:
+        mode: "scope_groups"
+        attribute_name: "nano_admin_is_workflow_scope_group"
       supported_operations:
         - name: "list"
           fields:

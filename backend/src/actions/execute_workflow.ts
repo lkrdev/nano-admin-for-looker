@@ -1,6 +1,7 @@
-import { getWorkflows, isUserAuthorized } from '../auth_utils';
+import { getWorkflows, isUserAuthorized, getScopeGroupUserIds, resolveUserIdLimitation, UserIdLimitationResult, UserIdLimitation } from '../auth_utils';
 import { ActionHandler } from './registry';
 import { BUILD_HASH, BUILD_TIMESTAMP } from '../build_hash';
+import { wrapLookerSDKWithLogging } from '../looker_logging_sdk';
 
 export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody) => {
   const { workflowId, workflowAction, payload } = reqBody;
@@ -54,12 +55,25 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
     };
   }
 
-  // 4. Construct context and execute
-  const context = {
-    sdk,
+  // Wrap SDK with workflow logging context
+  const workflowSdk = wrapLookerSDKWithLogging(sdk, {
     userId,
     workflowId: workflow.id,
-    parameters: workflow.parameters || {}
+    action: workflowAction
+  });
+
+  // 4. Construct context with framework helpers library and execute
+  const context = {
+    sdk: workflowSdk,
+    userId,
+    workflowId: workflow.id,
+    parameters: workflow.parameters || {},
+    helpers: {
+      getScopeGroupUserIds: (attributeName?: string): Promise<string[]> =>
+        getScopeGroupUserIds(workflowSdk, userId, attributeName),
+      resolveUserIdLimitation: (limitation?: UserIdLimitation): Promise<UserIdLimitationResult> =>
+        resolveUserIdLimitation(workflowSdk, userId, limitation)
+    }
   };
 
   try {

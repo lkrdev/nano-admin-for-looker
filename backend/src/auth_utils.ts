@@ -162,12 +162,36 @@ export async function getScopeGroupUserIds(
   return Array.from(scopeUserIdSet);
 }
 
-export async function getTenantUserIds(
+export interface UserIdLimitation {
+  mode?: 'self' | 'scope_groups' | 'none';
+  attribute_name?: string;
+}
+
+export interface UserIdLimitationResult {
+  active: boolean;
+  userIds: string[];
+  mode: 'self' | 'scope_groups' | 'none' | string;
+}
+
+export async function resolveUserIdLimitation(
   sdk: any,
-  userId: string,
-  attributeName: string = 'nano_admin_is_workflow_scope_group'
-): Promise<string[]> {
-  return await getScopeGroupUserIds(sdk, userId, attributeName);
+  currentUserId: string,
+  limitation?: UserIdLimitation
+): Promise<UserIdLimitationResult> {
+  const mode = limitation?.mode || 'self';
+
+  if (mode === 'none') {
+    return { active: false, userIds: [], mode: 'none' };
+  }
+
+  if (mode === 'scope_groups' || (mode as any) === 'tenant_groups') {
+    const attributeName = limitation?.attribute_name || 'nano_admin_is_workflow_scope_group';
+    const scopeUserIds = await getScopeGroupUserIds(sdk, currentUserId, attributeName);
+    return { active: true, userIds: scopeUserIds, mode: 'scope_groups' };
+  }
+
+  // Default mode: 'self'
+  return { active: true, userIds: [String(currentUserId)], mode: 'self' };
 }
 
 
