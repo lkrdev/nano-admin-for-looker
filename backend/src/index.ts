@@ -23,6 +23,19 @@ try {
   process.exit(1);
 }
 
+// Sliding refresh cooldown map (userId -> lastRefreshTimestamp)
+const slidingRefreshCooldowns = new Map<string, number>();
+
+function checkSlidingRefreshCooldown(userId: string): boolean {
+  const now = Date.now();
+  const lastRefresh = slidingRefreshCooldowns.get(userId) || 0;
+  if (now - lastRefresh > 5 * 60 * 1000) { // 5-minute cooldown
+    slidingRefreshCooldowns.set(userId, now);
+    return true;
+  }
+  return false;
+}
+
 ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
   // Process request through CORS middleware
   corsHandler(req, res, async () => {
@@ -37,7 +50,7 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
     }
 
     // 1. Perform Authentication
-    const { userId, status } = authenticateRequest(req);
+    const { userId, status, tokenAgeMs } = authenticateRequest(req);
 
     if (status !== 'valid') {
       console.warn(`[DEBUG] Authentication failed for user "${userId}" (Status: ${status}). Resetting/refreshing challenge...`);
@@ -70,6 +83,17 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
         res.status(500).json({ error: 'Internal Server Error', details: 'Could not generate authentication challenge' });
       }
       return;
+    }
+
+    // Status is 'valid': Perform asynchronous sliding refresh if token is older than 1 hour
+    const SLIDING_REFRESH_THRESHOLD_MS = 1 * 60 * 60 * 1000; // 1 hour
+    if (tokenAgeMs !== undefined && tokenAgeMs > SLIDING_REFRESH_THRESHOLD_MS) {
+      if (checkSlidingRefreshCooldown(userId)) {
+        console.log(`[DEBUG] Sliding refresh triggered for user ${userId} (Token age: ${Math.round(tokenAgeMs / 60000)}m > 60m).`);
+        refreshChallenge(sdk, userId).catch((err) => {
+          console.error(`[Sliding Refresh Error] Failed to asynchronously refresh challenge for user ${userId}:`, err);
+        });
+      }
     }
 
     // Status is 'valid'

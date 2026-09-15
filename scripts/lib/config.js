@@ -1,8 +1,39 @@
 const fs = require('fs');
+const path = require('path');
 const { execSync } = require('child_process');
 const { askQuestion } = require('./ui');
 
+function loadEnvFile() {
+  const rootDir = path.join(__dirname, '..', '..');
+  const envFiles = [path.join(rootDir, '.env'), path.join(rootDir, '.env.local')];
+
+  for (const envPath of envFiles) {
+    if (fs.existsSync(envPath)) {
+      try {
+        const content = fs.readFileSync(envPath, 'utf8');
+        content.split('\n').forEach(line => {
+          const trimmed = line.trim();
+          if (trimmed && !trimmed.startsWith('#')) {
+            const eqIdx = trimmed.indexOf('=');
+            if (eqIdx > 0) {
+              const key = trimmed.slice(0, eqIdx).trim();
+              let val = trimmed.slice(eqIdx + 1).trim();
+              if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+                val = val.slice(1, -1);
+              }
+              if (!process.env[key]) {
+                process.env[key] = val;
+              }
+            }
+          }
+        });
+      } catch (e) {}
+    }
+  }
+}
+
 function loadConfig(configPath) {
+  loadEnvFile();
   let config = {};
   if (fs.existsSync(configPath)) {
     try {

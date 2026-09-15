@@ -11,12 +11,12 @@ export function checkRateLimit(userId: string): boolean {
   const limit = refreshLimits.get(userId);
 
   if (!limit || now > limit.resetTime) {
-    // Limit: 5 refreshes per 10 seconds
+    // Limit: 10 refreshes per 10 seconds
     refreshLimits.set(userId, { count: 1, resetTime: now + 10000 });
     return true;
   }
 
-  if (limit.count >= 5) {
+  if (limit.count >= 10) {
     return false;
   }
 
@@ -34,10 +34,15 @@ export function generateChallengeToken(userId: string): string {
   return `${payload}|${signature}`;
 }
 
-export function verifyChallengeToken(userId: string, token: string): ChallengeVerificationResult {
+export interface VerifyTokenResponse {
+  status: ChallengeVerificationResult;
+  tokenAgeMs?: number;
+}
+
+export function verifyChallengeToken(userId: string, token: string): VerifyTokenResponse {
   if (!token) {
     console.log(`[DEBUG] verifyChallengeToken: Token is missing for user ${userId}`);
-    return 'missing';
+    return { status: 'missing' };
   }
 
   console.log(`[DEBUG] verifyChallengeToken: Received token for user ${userId}. SHA256: ${hashForLog(token)}`);
@@ -46,13 +51,13 @@ export function verifyChallengeToken(userId: string, token: string): ChallengeVe
     const parts = token.split('|');
     if (parts.length !== 4) {
       console.log(`[DEBUG] verifyChallengeToken: Invalid token format (split parts: ${parts.length})`);
-      return 'invalid';
+      return { status: 'invalid' };
     }
     const [tokenUserId, tokenTimestampStr, random, signature] = parts;
 
     if (tokenUserId !== userId) {
       console.log(`[DEBUG] verifyChallengeToken: User ID mismatch. Expected: ${userId}, Token: ${tokenUserId}`);
-      return 'invalid';
+      return { status: 'invalid' };
     }
 
     // Verify signature
@@ -66,18 +71,25 @@ export function verifyChallengeToken(userId: string, token: string): ChallengeVe
       Buffer.from(expectedSignature, 'hex')
     );
 
-    if (!signatureValid) return 'invalid';
+    if (!signatureValid) return { status: 'invalid' };
 
-    // Verify timestamp (within 2 minutes)
+    // Verify timestamp (default TTL: 8 hours = 28,800,000 ms)
     const tokenTimestamp = parseInt(tokenTimestampStr, 10);
-    if (isNaN(tokenTimestamp) || Date.now() - tokenTimestamp > 120000) {
-      return 'expired';
+    const DEFAULT_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
+    if (isNaN(tokenTimestamp)) {
+      return { status: 'invalid' };
     }
 
-    return 'valid';
+    const tokenAgeMs = Date.now() - tokenTimestamp;
+    if (tokenAgeMs > DEFAULT_TTL_MS) {
+      console.log(`[DEBUG] verifyChallengeToken: Token expired (age: ${Math.round(tokenAgeMs / 1000)}s > ${DEFAULT_TTL_MS / 1000}s)`);
+      return { status: 'expired', tokenAgeMs };
+    }
+
+    return { status: 'valid', tokenAgeMs };
   } catch (err) {
     console.error('Error verifying challenge token:', err);
-    return 'invalid';
+    return { status: 'invalid' };
   }
 }
 

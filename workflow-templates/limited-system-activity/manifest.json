@@ -1,0 +1,60 @@
+{
+  "name": "Limited System Activity Template",
+  "description": "Exposes a restricted slice of Looker System Activity explores with enforced performance limits and user ID access constraints.",
+  "version": "1.0.0",
+  "mount_type": "page",
+  "parameters": {
+    "explores": {
+      "type": "array",
+      "description": "List of system__activity explores allowed for this workflow and their configurations",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the explore in system__activity (e.g. 'history', 'dashboard', 'user')"
+          },
+          "allow_csv_export": {
+            "type": "boolean",
+            "description": "Whether to allow exporting query results to CSV for this explore (default: false)"
+          },
+          "required_filter_fields": {
+            "type": "array",
+            "description": "List of specific field(s) required to be filtered before query execution (e.g. ['history.created_time'])",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_row_limit": {
+            "type": "number",
+            "description": "Performance preset enforcing a maximum row limit cap for queries"
+          }
+        },
+        "required": [
+          "name"
+        ]
+      }
+    },
+    "user_id_limitation": {
+      "type": "object",
+      "description": "Limitation enforcing filtering queries by user ID",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "self",
+            "scope_groups",
+            "none"
+          ],
+          "default": "self",
+          "description": "'self' (default) filters to the invoking user's ID; 'scope_groups' filters to user IDs in scope groups where configured user attribute is 'yes'; 'none' applies no user ID filtering"
+        },
+        "attribute_name": {
+          "type": "string",
+          "description": "User attribute name set on groups for scope group matching (default: 'nano_admin_is_workflow_scope_group')"
+        }
+      }
+    }
+  }
+}
+

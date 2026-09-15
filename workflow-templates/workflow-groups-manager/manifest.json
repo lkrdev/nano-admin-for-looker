@@ -1,0 +1,12 @@
+{
+  "name": "Workflow Groups Manager",
+  "description": "Audits, provisions, and manages Scope Groups and Workflow Access Groups in Looker.",
+  "version": "1.0.0",
+  "mount_type": "page",
+  "parameters": {
+    "default_attribute_name": {
+      "type": "string",
+      "description": "Default group user attribute name for Scope Groups (default: 'nano_admin_is_workflow_scope_group')"
+    }
+  }
+}

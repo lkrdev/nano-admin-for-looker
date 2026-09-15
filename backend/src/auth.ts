@@ -5,6 +5,7 @@ import { verifyChallengeToken, ChallengeVerificationResult } from './challenge';
 export interface AuthenticationResult {
   userId: string;
   status: ChallengeVerificationResult;
+  tokenAgeMs?: number;
 }
 
 function hashForLog(value: string): string {
@@ -37,7 +38,7 @@ export function authenticateRequest(req: ff.Request): AuthenticationResult {
     return { userId, status: 'invalid' };
   }
 
-  const status = verifyChallengeToken(userId, challenge);
-  console.log(`[DEBUG] authenticateRequest: verifyChallengeToken result: ${status}`);
-  return { userId, status };
+  const { status, tokenAgeMs } = verifyChallengeToken(userId, challenge);
+  console.log(`[DEBUG] authenticateRequest: verifyChallengeToken result: ${status}, age: ${tokenAgeMs ? Math.round(tokenAgeMs / 1000) + 's' : 'N/A'}`);
+  return { userId, status, tokenAgeMs };
 }
