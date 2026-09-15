@@ -1,4 +1,4 @@
-import { getScopeGroupUserIds } from '../../../auth_utils';
+import { getScopeGroupUserIds, UserIdLimitationResult, UserIdLimitation } from '../../../auth_utils';
 
 export interface ExploreConfig {
   name: string;
@@ -7,13 +7,6 @@ export interface ExploreConfig {
   max_row_limit?: number;
 }
 
-export interface UserIdLimitation {
-  mode?: 'self' | 'scope_groups' | 'none';
-  attribute_name?: string;
-}
-
-
-
 export interface WorkflowContext {
   sdk: any;
   userId: string;
@@ -21,6 +14,10 @@ export interface WorkflowContext {
   parameters: {
     explores?: ExploreConfig[];
     user_id_limitation?: UserIdLimitation;
+  };
+  helpers?: {
+    getScopeGroupUserIds: (attributeName?: string) => Promise<string[]>;
+    resolveUserIdLimitation: (limitationConfig?: UserIdLimitation) => Promise<UserIdLimitationResult>;
   };
 }
 
@@ -71,7 +68,7 @@ export const handler = async (
     const exploreMeta = await fetchExploreMetadata(context.sdk, exploreName);
 
     const userIdField = findUserIdFieldInExplore(exploreMeta, exploreName);
-    const limitationRes = await resolveUserIdFilterValues(context.sdk, context.userId, limitation);
+    const limitationRes = await resolveUserIdFilterValues(context, limitation);
     const queryFilters = buildEnforcedFilters(payload?.filters || {}, limitationRes, userIdField);
 
     validatePerformancePresets(exploreConfig, payload?.fields || [], queryFilters, exploreMeta);
@@ -101,7 +98,7 @@ export const handler = async (
     const exploreMeta = await fetchExploreMetadata(context.sdk, exploreName);
 
     const userIdField = findUserIdFieldInExplore(exploreMeta, exploreName);
-    const limitationRes = await resolveUserIdFilterValues(context.sdk, context.userId, limitation);
+    const limitationRes = await resolveUserIdFilterValues(context, limitation);
     const queryFilters = buildEnforcedFilters(payload?.filters || {}, limitationRes, userIdField);
 
     validatePerformancePresets(exploreConfig, payload?.fields || [], queryFilters, exploreMeta);
@@ -134,7 +131,7 @@ export const handler = async (
     const exploreMeta = await fetchExploreMetadata(context.sdk, exploreName);
 
     const userIdField = findUserIdFieldInExplore(exploreMeta, exploreName);
-    const limitationRes = await resolveUserIdFilterValues(context.sdk, context.userId, limitation);
+    const limitationRes = await resolveUserIdFilterValues(context, limitation);
     const queryFilters = buildEnforcedFilters(payload?.filters || {}, limitationRes, userIdField);
 
     validatePerformancePresets(exploreConfig, payload?.fields || [], queryFilters, exploreMeta);
@@ -283,36 +280,41 @@ function findUserIdFieldInExplore(exploreMeta: any, exploreName: string): string
 }
 
 async function resolveUserIdFilterValues(
-  sdk: any,
-  currentUserId: string,
+  context: WorkflowContext,
   limitation?: UserIdLimitation
-): Promise<{ userIds: string[]; active: boolean }> {
+): Promise<UserIdLimitationResult> {
+  if (context.helpers?.resolveUserIdLimitation) {
+    return await context.helpers.resolveUserIdLimitation(limitation);
+  }
+
   const mode = limitation?.mode || 'self';
 
   if (mode === 'none') {
-    return { userIds: [], active: false };
+    return { active: false, userIds: [], mode: 'none' };
   }
 
   if (mode === 'scope_groups' || (mode as any) === 'tenant_groups') {
     const attributeName = limitation?.attribute_name || 'nano_admin_is_workflow_scope_group';
-    const scopeUserIds = await getScopeGroupUserIds(sdk, currentUserId, attributeName);
-    return { userIds: scopeUserIds, active: true };
+    const scopeUserIds = context.helpers?.getScopeGroupUserIds
+      ? await context.helpers.getScopeGroupUserIds(attributeName)
+      : await getScopeGroupUserIds(context.sdk, context.userId, attributeName);
+    return { active: true, userIds: scopeUserIds, mode: 'scope_groups' };
   }
 
   // Default mode: 'self'
-  return { userIds: [currentUserId], active: true };
+  return { active: true, userIds: [String(context.userId)], mode: 'self' };
 }
 
 function buildEnforcedFilters(
   userFilters: Record<string, string>,
-  resolution: { userIds: string[]; active: boolean },
+  resolution: UserIdLimitationResult,
   userIdFieldName: string = 'user.id'
 ): Record<string, string> {
   const filters: Record<string, string> = { ...userFilters };
 
   if (resolution.active) {
     const fieldName = userIdFieldName || 'user.id';
-    if (resolution.userIds.length === 0) {
+    if (!resolution.userIds || resolution.userIds.length === 0) {
       filters[fieldName] = '-*'; // Matches no users if no scope group user IDs found
     } else {
       filters[fieldName] = resolution.userIds.join(',');

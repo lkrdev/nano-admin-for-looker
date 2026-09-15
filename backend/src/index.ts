@@ -4,6 +4,7 @@ import cors from 'cors';
 import { authenticateRequest } from './auth';
 import { checkRateLimit, refreshChallenge } from './challenge';
 import { actionRegistry } from './actions/registry';
+import { wrapLookerSDKWithLogging } from './looker_logging_sdk';
 
 // Set up CORS configuration
 const corsHandler = cors({
@@ -112,8 +113,10 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
       return;
     }
 
+    const requestSdk = wrapLookerSDKWithLogging(sdk, { userId, action });
+
     try {
-      const result = await handler(sdk, userId, req.body);
+      const result = await handler(requestSdk, userId, req.body);
       res.status(200).json(result);
     } catch (error: any) {
       console.error(`Error executing action "${action}":`, error);

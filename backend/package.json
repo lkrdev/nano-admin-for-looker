@@ -6,6 +6,7 @@
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
+    "test": "tsc && node --test dist/**/*.test.js",
     "gcp-build": "tsc",
     "dev": "tsc && functions-framework --target=nanoAdminBackend --port=8081",
     "start": "functions-framework --target=nanoAdminBackend --port=8081"

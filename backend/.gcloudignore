@@ -13,3 +13,9 @@ looker.ini
 
 # Ignore logs
 *.log
+
+# Ignore test files and testing utilities
+*.test.ts
+*.test.js
+**/tests/
+src/testing/
