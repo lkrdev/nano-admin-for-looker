@@ -1,6 +1,7 @@
 const path = require('path');
 const { logDeployStep } = require('./lib/logger');
 const {
+  askQuestion,
   printHeader,
   printDeploymentPreview,
   askConfirmation,
@@ -126,11 +127,6 @@ async function runFullDeploymentPipeline() {
   }
 
   // Step 7: Execute (Mutations)
-  logDeployStep('Operations Started');
-
-  saveConfig(CONFIG_PATH, mergedConfig);
-  logDeployStep('Configuration Saved', extractSanitizedConfigSummary(mergedConfig));
-
   const multiInstanceCreds = {};
   for (let i = 0; i < mergedConfig.instances.length; i++) {
     const inst = mergedConfig.instances[i];
@@ -143,8 +139,6 @@ async function runFullDeploymentPipeline() {
       client_id: creds?.clientId || '',
       client_secret: creds?.clientSecret || ''
     };
-    // Mark credential method as 'reuse' for subsequent deployment runs
-    mergedConfig.instances[i].looker_credential_method = 'reuse';
     if (creds?.serviceAccountId) {
       mergedConfig.instances[i].looker_service_account = String(creds.serviceAccountId);
     }
@@ -153,9 +147,12 @@ async function runFullDeploymentPipeline() {
   const { gcfUrl, secretManagerError } = await deployGCF(mergedConfig, { instances: multiInstanceCreds });
   logDeployStep('GCF Deployed', { gcfUrl, secretManagerError });
 
-  // Update deploy-config.json on disk with credential method set to 'reuse' for future runs
+  // Mark credential method as 'reuse' and save to disk ONLY after Secret Manager & GCF deployment succeed
+  for (let i = 0; i < mergedConfig.instances.length; i++) {
+    mergedConfig.instances[i].looker_credential_method = 'reuse';
+  }
   saveConfig(CONFIG_PATH, mergedConfig);
-  logDeployStep('Configuration Saved', extractSanitizedConfigSummary(mergedConfig));
+  logDeployStep('Configuration Saved Post-Deployment', extractSanitizedConfigSummary(mergedConfig));
 
   const publicUrl = `https://storage.googleapis.com/${mergedConfig.gcs_bucket_name}/`;
   const manifestContent = updateLocalConfigs(gcfUrl, publicUrl);
@@ -207,8 +204,7 @@ function evaluateValidationResults(results) {
 
 async function resolveInstanceConnections(config) {
   const instances = [];
-  let addMore = true;
-  const existingInstances = config.instances || [];
+  const existingInstances = Array.isArray(config.instances) && config.instances.length > 0 ? config.instances : [];
 
   if (existingInstances.length > 0) {
     for (const inst of existingInstances) {
@@ -216,6 +212,21 @@ async function resolveInstanceConnections(config) {
     }
   } else {
     instances.push(await promptLookerConnection({}));
+  }
+
+  let addMore = true;
+  while (addMore) {
+    const answer = await askQuestion('\nWould you like to add another target Looker instance to this deployment? (y/N): ');
+    if (answer.toLowerCase() === 'y' || answer.toLowerCase() === 'yes') {
+      const nextInst = await promptLookerConnection({});
+      if (instances.some(i => i.looker_host === nextInst.looker_host)) {
+        console.warn(`⚠️  Warning: Instance host '${nextInst.looker_host}' is already in the target instances list.`);
+      } else {
+        instances.push(nextInst);
+      }
+    } else {
+      addMore = false;
+    }
   }
 
   return instances;

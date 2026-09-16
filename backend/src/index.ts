@@ -40,63 +40,50 @@ class CustomNodeSettings extends ApiSettings {
 // SDK Cache for Multi-Instance Support (host -> Looker SDK instance)
 const sdkCache = new Map<string, any>();
 
+import crypto from 'crypto';
+
+export function sanitizeHostForSecret(host: string): string {
+  const cleanHost = (host || '').trim().toLowerCase();
+  let sanitized = cleanHost.replace(/[^a-z0-9]/g, '_');
+  if (sanitized.length > 180) {
+    const hash = crypto.createHash('sha256').update(cleanHost).digest('hex').substring(0, 16);
+    sanitized = `${sanitized.substring(0, 180)}_${hash}`;
+  }
+  return sanitized;
+}
+
 function getSDKForInstance(trustedHost?: string): any {
   const cleanHost = trustedHost ? trustedHost.trim().toLowerCase() : '__default__';
   if (sdkCache.has(cleanHost)) {
     return sdkCache.get(cleanHost);
   }
 
-  let hostConfig: { base_url?: string; port?: string | number; verify_ssl?: boolean; client_id?: string; client_secret?: string } | null = null;
+  const sanitizedHost = sanitizeHostForSecret(cleanHost);
+  const perInstClientId = process.env[`NANO_ADMIN_LOOKERSDK_CLIENT_ID_${sanitizedHost}`];
+  const perInstClientSecret = process.env[`NANO_ADMIN_LOOKERSDK_CLIENT_SECRET_${sanitizedHost}`];
 
-  // 1. Check LOOKER_INSTANCES_CONFIG JSON secret map
-  const instancesConfigJson = process.env.LOOKER_INSTANCES_CONFIG;
-  if (instancesConfigJson) {
-    try {
-      const instancesConfig = JSON.parse(instancesConfigJson);
-      const matchedKey = Object.keys(instancesConfig).find(
-        k => k.trim().toLowerCase() === cleanHost || k.trim().toLowerCase().replace(/:.*$/, '') === cleanHost.replace(/:.*$/, '')
-      );
-      if (matchedKey) {
-        hostConfig = instancesConfig[matchedKey];
-      }
-    } catch (err) {
-      console.error(`[SDKManager] Failed to parse LOOKER_INSTANCES_CONFIG:`, err);
-    }
-  }
-
-  // 2. Single-instance fallback from LOOKERSDK_* env vars if hostConfig not found
-  if ((!hostConfig || !hostConfig.client_id) && process.env.LOOKERSDK_CLIENT_ID && process.env.LOOKERSDK_CLIENT_SECRET) {
-    console.log(`[SDKManager] Using LOOKERSDK_* environment variables fallback for host ${cleanHost}`);
-    hostConfig = {
-      base_url: process.env.LOOKERSDK_BASE_URL || (cleanHost !== '__default__' ? `https://${cleanHost}` : ''),
-      client_id: process.env.LOOKERSDK_CLIENT_ID,
-      client_secret: process.env.LOOKERSDK_CLIENT_SECRET,
-      verify_ssl: process.env.LOOKERSDK_VERIFY_SSL !== 'false'
-    };
-  }
-
-  if (hostConfig && hostConfig.client_id && hostConfig.client_secret) {
-    console.log(`[SDKManager] Initializing Looker SDK with CustomNodeSettings for host: ${cleanHost}`);
-    const baseUrl = hostConfig.base_url || `https://${cleanHost}:${hostConfig.port || 443}`;
+  if (perInstClientId && perInstClientSecret) {
+    console.log(`[SDKManager] Initializing Looker SDK with Secret Manager credentials for host: ${cleanHost}`);
+    const baseUrl = `https://${cleanHost}`;
     const customSettings = new CustomNodeSettings({
       base_url: baseUrl,
-      client_id: hostConfig.client_id,
-      client_secret: hostConfig.client_secret,
-      verify_ssl: hostConfig.verify_ssl !== undefined ? hostConfig.verify_ssl : true
+      client_id: perInstClientId,
+      client_secret: perInstClientSecret,
+      verify_ssl: true
     });
     const sdkInstance = LookerNodeSDK.init40(customSettings as any);
     sdkCache.set(cleanHost, sdkInstance);
     return sdkInstance;
   }
 
-  // 3. Fallback to default LookerNodeSDK.init40() reading looker.ini / standard env
+  // Fallback to default LookerNodeSDK.init40() reading looker.ini / standard env for dev tests
   try {
     console.log(`[SDKManager] Initializing default LookerNodeSDK for host: ${cleanHost}`);
     const defaultSdk = LookerNodeSDK.init40();
     sdkCache.set(cleanHost, defaultSdk);
     return defaultSdk;
   } catch (e) {
-    console.error(`Fatal: Default Looker Node SDK failed to initialize for host: ${cleanHost}`, e);
+    console.error(`Fatal: Looker Node SDK failed to initialize for host: ${cleanHost}`, e);
     throw e;
   }
 }

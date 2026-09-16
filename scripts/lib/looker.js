@@ -79,6 +79,7 @@ async function assignAdminRoleToUser(connectionConfig, userId) {
 async function getLookerCredentials(connectionConfig, saConfig) {
   let clientId = '';
   let clientSecret = '';
+  let targetSaId = '';
 
   console.log('\n🔐 Looker API Credentials Provisioning...');
 
@@ -90,11 +91,13 @@ async function getLookerCredentials(connectionConfig, saConfig) {
   if (saConfig.looker_credential_method === 'manual') {
     clientId = saConfig.manual_client_id;
     clientSecret = saConfig.manual_client_secret;
+    targetSaId = saConfig.looker_service_account || '';
     console.log('✅ Using manually entered API credentials.');
 
     if (saConfig.looker_service_account) {
       const targetLookerSa = await getLookerSaById(connectionConfig, saConfig.looker_service_account);
       if (targetLookerSa) {
+        targetSaId = targetLookerSa.id;
         const hasAdmin = await checkUserAdminPermission(connectionConfig, targetLookerSa.id);
         if (!hasAdmin) {
           console.log(`🚨 WARNING: Looker service account permissions check failed. We verified that service account ID "${targetLookerSa.id}" is missing the Administrator role/permissions. Nano-admin administrative workflows will fail unless you assign the 'Admin' role (or a role containing the 'administer' permission) to this service account in Looker.`);
@@ -106,7 +109,6 @@ async function getLookerCredentials(connectionConfig, saConfig) {
       }
     }
   } else {
-    let targetSaId = '';
     let targetLookerSa = null;
 
     if (saConfig.looker_service_account) {
@@ -228,30 +230,49 @@ function updateLocalConfigs(gcfUrl, publicUrl) {
 }
 
 async function configureLookerAttribute(config, gcfUrl) {
-  console.log('\n⚙️ Configuring Looker user attribute for secure challenge-response...');
+  console.log(`\n⚙️ Configuring Looker user attribute for secure challenge-response on host ${config.looker_host}...`);
 
-  let domainOrigin = '';
+  let domainOrigin = gcfUrl;
   try {
-    domainOrigin = new URL(gcfUrl).origin;
+    if (gcfUrl && gcfUrl.startsWith('http')) {
+      domainOrigin = new URL(gcfUrl).origin;
+    }
   } catch (e) {}
 
-  const allowlistItems = [gcfUrl];
-  if (domainOrigin && !allowlistItems.includes(domainOrigin)) {
-    allowlistItems.push(domainOrigin);
-  }
-  const allowlist = allowlistItems.join(',');
   const attrName = 'nano_admin_admin_extension_nano_admin_challenge';
 
-  console.log(`Creating/Updating user attribute "${attrName}" with domain whitelist:`);
-  console.log(`👉 ${allowlist}`);
+  // Pre-check if attribute already exists and has the required allowlist
+  try {
+    const attrOutput = execSync(`looker-cli api userattribute all_user_attributes --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const attributes = parseJsonFromStdout(attrOutput);
+    const existingAttr = Array.isArray(attributes) && attributes.find(a => a.name === attrName);
+    if (existingAttr) {
+      const existingAllowlistStr = Array.isArray(existingAttr.hidden_value_domain_whitelist)
+        ? existingAttr.hidden_value_domain_whitelist.join(',')
+        : String(existingAttr.hidden_value_domain_whitelist || existingAttr.domain_allowlist || '');
+
+      const isWhitelisted = existingAllowlistStr.includes(domainOrigin) || (gcfUrl && existingAllowlistStr.includes(gcfUrl));
+      if (isWhitelisted) {
+        console.log(`✅ Looker user attribute "${attrName}" on ${config.looker_host} is already whitelisted for domain: ${domainOrigin}`);
+        return;
+      }
+    }
+  } catch (e) {}
+
+  console.log(`Creating/Updating user attribute "${attrName}" on ${config.looker_host} with domain whitelist: ${domainOrigin}`);
 
   try {
-    const cmd = `looker-cli attribute create ${attrName} "Nano Admin Challenge" --is-hidden --type=string --domain-allowlist="${allowlist}" --default-value="init_challenge" --force --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`;
-    execSync(cmd, { stdio: 'inherit' });
-    console.log('✅ Successfully configured Looker user attribute.');
+    const cmd = `looker-cli attribute create ${attrName} "Nano Admin Challenge" --is-hidden --type=string --domain-allowlist="${domainOrigin}" --default-value="init_challenge" --force --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`;
+    execSync(cmd, { stdio: 'pipe' });
+    console.log(`✅ Successfully configured Looker user attribute on ${config.looker_host}.`);
   } catch (e) {
-    console.error('❌ Failed to configure Looker user attribute automatically via CLI:', e.message);
-    console.log('Please make sure you are logged in to Looker via looker-cli and try again, or manually configure the attribute in Looker.');
+    const errText = (e.stderr ? e.stderr.toString() : '') + ' ' + (e.message || '');
+    if (errText.includes('cannot increase the number of domains matched by the hidden value domain whitelist')) {
+      console.warn(`⚠️  Notice: Looker host ${config.looker_host} prevented updating the domain whitelist because user challenge tokens already exist on the instance.`);
+      console.warn(`    If backend connectivity works, no action is needed. If you changed backend URLs, reset the attribute in Looker Admin -> User Attributes.`);
+    } else {
+      console.warn(`⚠️  Warning: Failed to configure Looker user attribute automatically via CLI on ${config.looker_host}:`, e.message);
+    }
   }
 }
 

@@ -164,9 +164,65 @@ function getSavedServiceAccountConfig(config, checkSecretsFn) {
   }));
 }
 
+function getLookerCliProfiles() {
+  const profiles = [];
+  try {
+    const output = execSync('looker-cli profile ls', { encoding: 'utf8', stdio: 'pipe' });
+    const lines = output.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const isDefault = trimmed.startsWith('*');
+      const cleanLine = trimmed.replace(/^\*\s*/, '');
+      const match = cleanLine.match(/^([^\s]+)\s+\(([^:]+)(?::(\d+))?\)/);
+      if (match) {
+        const name = match[1];
+        const host = match[2];
+        const port = match[3] || '443';
+        const ssl = port !== '80';
+        profiles.push({ name, host, port, ssl, isDefault });
+      }
+      if (profiles.length >= 10) break;
+    }
+  } catch (e) {}
+  return profiles;
+}
+
 async function promptLookerConnection(existingInstance = {}) {
-  console.log('⚙️ Configuring Looker target instance connection...');
+  console.log('\n⚙️ Configuring Looker target instance connection...');
   
+  const profiles = getLookerCliProfiles();
+
+  if (profiles.length > 0) {
+    console.log('\nFound Looker profile(s) from looker-cli:');
+    profiles.forEach((p, idx) => {
+      console.log(`  ${idx + 1} = ${p.name} (${p.host}:${p.port})${p.isDefault ? ' [default]' : ''}`);
+    });
+    console.log(`  ${profiles.length + 1} = Enter a custom Looker host manually`);
+
+    const defaultChoice = '1';
+    const choiceInput = await askQuestion(`\nSelect a Looker profile or custom [${defaultChoice}]: `);
+    const choiceStr = choiceInput || defaultChoice;
+    const choiceNum = parseInt(choiceStr, 10);
+
+    if (!isNaN(choiceNum) && choiceNum >= 1 && choiceNum <= profiles.length) {
+      const selected = profiles[choiceNum - 1];
+      console.log(`✅ Selected profile '${selected.name}' (${selected.host}:${selected.port})`);
+      return {
+        looker_host: selected.host,
+        looker_port: selected.port,
+        looker_ssl: selected.ssl
+      };
+    } else if (choiceStr && !choiceStr.match(/^\d+$/)) {
+      const host = choiceStr.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+      const portInput = await askQuestion(`Enter Looker API Port [${existingInstance.looker_port || '443'}]: `);
+      const port = portInput || existingInstance.looker_port || '443';
+      const sslInput = await askQuestion(`Use SSL (HTTPS)? (Y/n) [Y]: `);
+      const ssl = sslInput.toLowerCase() !== 'n';
+      return { looker_host: host, looker_port: port, looker_ssl: ssl };
+    }
+  }
+
   const hostInput = await askQuestion(`Enter Looker API Host [${existingInstance.looker_host || 'your-instance.looker.app'}]: `);
   const host = (hostInput || existingInstance.looker_host || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
   if (!host) {
@@ -199,8 +255,8 @@ async function promptGCPConfig(config, localDefaults = {}) {
     process.exit(1);
   }
   
-  const regionInput = await askQuestion(`Enter GCP Region [${config.gcp_region || 'us-central1'}]: `);
-  const region = regionInput || config.gcp_region || 'us-central1';
+  const regionInput = await askQuestion(`Enter GCP Region [${config.gcp_region || 'northamerica-northeast1'}]: `);
+  const region = regionInput || config.gcp_region || 'northamerica-northeast1';
 
   const gcfNameInput = await askQuestion(`Enter Cloud Function Name [${config.gcf_name || 'nano-admin-backend'}]: `);
   const functionName = gcfNameInput || config.gcf_name || 'nano-admin-backend';
