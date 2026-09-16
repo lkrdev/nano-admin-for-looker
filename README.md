@@ -127,4 +127,4 @@ Create the attribute in Looker under **Admin -> Users -> User Attributes**:
 * **Data Type**: `String`
 * **User Access**: `View`
 * **Hide Values**: `Yes`
-* **Domain Whitelist**: Add `http://localhost:8081` (local) and your production GCF URL (production).
+* **Domain Whitelist**: Add your production GCF URL (e.g. `https://region-project.cloudfunctions.net/nano-admin-backend`).

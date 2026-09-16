@@ -16,69 +16,62 @@ function printHeader() {
   console.log('🚀 Nano-Admin for Looker Deployment Script 🚀');
   console.log('====================================================');
   console.log('Welcome! You will be guided through configuring your target settings.');
-  console.log('NOTE: No changes will be applied to your Looker instance or GCP project');
-  console.log('until you have reviewed and confirmed the final deployment preview.');
   console.log('====================================================\n');
 }
 
-function printDeploymentPreview(config, lookerUser, status) {
-  let credsLabel = 'Auto-generated Looker Service Account';
-  let lookerSaStatus = status.saExists ? 'EXISTS (WILL REUSE / SKIPPED RE-CREATION)' : 'WILL BE CREATED';
-
-  if (config.looker_credential_method === 'manual') {
-    credsLabel = 'Manual User API Keys (Provided during prompt)';
-    lookerSaStatus = 'SKIPPED (USING MANUAL KEYS)';
-  } else if (config.looker_credential_method === 'reuse') {
-    credsLabel = 'Reuse Existing GCP Secret Manager Credentials';
-  }
-
-  let saLabel = 'Auto-managed Service Account';
-  if (config.looker_service_account) {
-    saLabel = config.looker_service_account;
-  } else if (config.looker_credential_method === 'manual') {
-    saLabel = 'N/A (Using manual credentials)';
-  } else if (config.looker_credential_method === 'reuse') {
-    saLabel = config.looker_service_account ? `${config.looker_service_account} (Reusing credentials)` : 'Reusing current credentials stored in Secret Manager';
-  }
-
-  let clientIdAction = status.secretClientIdExists ? 'UPDATED (NEW VERSION ADDED)' : 'NEWLY CREATED';
-  let clientSecretAction = status.secretClientSecretExists ? 'UPDATED (NEW VERSION ADDED)' : 'NEWLY CREATED';
-  if (config.looker_credential_method === 'reuse') {
-    clientIdAction = 'REUSED (UNTOUCHED)';
-    clientSecretAction = 'REUSED (UNTOUCHED)';
-  }
+function printDeploymentPreview(config, lookerUsers, status) {
+  const instances = config.instances || [
+    {
+      looker_host: config.looker_host,
+      looker_port: config.looker_port,
+      looker_ssl: config.looker_ssl,
+      looker_service_account: config.looker_service_account,
+      looker_credential_method: config.looker_credential_method
+    }
+  ];
 
   console.log('\n======================================================');
   console.log('🔎 PREVIEW OF PENDING CHANGES');
   console.log('======================================================');
   console.log('Please review the active sessions and target configuration below:');
-  console.log('\nTarget Configurations:');
-  console.log(`  • Looker Host:            ${config.looker_host}:${config.looker_port} (SSL: ${config.looker_ssl})`);
-  console.log(`  • Looker Service Account:   ${saLabel}`);
-  console.log(`  • Looker Credentials:     ${credsLabel}`);
+  console.log('\nGCP Deployment Settings:');
   console.log(`  • GCP Project ID:         ${config.gcp_project_id}`);
   console.log(`  • GCP Region:             ${config.gcp_region}`);
   console.log(`  • Cloud Function Name:    ${config.gcf_name}`);
   console.log(`  • GCS Bucket Name:        ${config.gcs_bucket_name}`);
-  console.log('\nActive Sessions (used to apply changes):');
-  console.log(`  • Active GCP Account:     ${status.gcpAccount}`);
-  console.log(`  • Active Looker User:     ${lookerUser}`);
-  console.log('\nDeployment Actions & Resource Overwrites:');
-  console.log('  [✓] Compile & package extension (will overwrite extension/src/config.ts & manifest.lkml)');
-  console.log('  [✓] Compile backend TypeScript code');
-  console.log(`  [ ] Looker Service Account Configuration:`);
-  console.log(`      └─ Action: [${lookerSaStatus}]`);
+  console.log(`  • Active GCP Account:     ${status.gcpAccount || 'Authenticated User'}`);
+  
+  console.log(`\nTarget Looker Instances (${instances.length}):`);
+  instances.forEach((inst, idx) => {
+    const user = Array.isArray(lookerUsers)
+      ? (lookerUsers.find(u => u.host === inst.looker_host)?.user || 'Authenticated User')
+      : (lookerUsers || 'Authenticated User');
+
+    let saLabel = inst.looker_service_account || 'Auto-managed Service Account';
+    if (inst.looker_credential_method === 'manual') saLabel = 'N/A (Using manual credentials)';
+    else if (inst.looker_credential_method === 'reuse') saLabel = inst.looker_service_account ? `${inst.looker_service_account} (Reusing)` : 'Reusing Secret Manager creds';
+
+    console.log(`  [Instance ${idx + 1}] ${inst.looker_host}:${inst.looker_port} (SSL: ${inst.looker_ssl ? 'Yes' : 'No'})`);
+    console.log(`      ├─ Service Account:   ${saLabel}`);
+    console.log(`      └─ Active Session:    ${user}`);
+  });
+
+  let clientIdAction = status.secretClientIdExists ? 'UPDATED (NEW VERSION ADDED)' : 'NEWLY CREATED';
+  let clientSecretAction = status.secretClientSecretExists ? 'UPDATED (NEW VERSION ADDED)' : 'NEWLY CREATED';
+
+  console.log('\nDeployment Actions & Resource Overwrites (Pending Phase 7 Execution):');
+  console.log('  [ ] Compile backend TypeScript code');
+  console.log('  [ ] Compile & package extension React bundle');
   console.log(`  [ ] Deploy Google Cloud Function:`);
   console.log(`      └─ Status: ${config.gcf_name} will be [${status.functionExists ? 'OVERWRITTEN / RE-DEPLOYED' : 'NEWLY CREATED'}]`);
   console.log(`  [ ] Secret Manager Provisioning & IAM Setup:`);
-  console.log(`      ├─ LOOKERSDK_CLIENT_ID:     [${clientIdAction}]`);
-  console.log(`      ├─ LOOKERSDK_CLIENT_SECRET: [${clientSecretAction}]`);
+  console.log(`      ├─ LOOKER_INSTANCES_CONFIG: [NEWLY CREATED / UPDATED WITH MULTI-INSTANCE MAP]`);
   console.log(`      ├─ GCF_HMAC_SECRET:         [${status.secretHmacExists ? 'REUSED (UNTOUCHED)' : 'NEWLY CREATED'}]`);
   console.log(`      └─ Secret Accessor Role:    [GRANT ACCESS TO DEFAULT GCP COMPUTE SERVICE ACCOUNT]`);
   console.log(`  [ ] GCP Project IAM Setup:`);
   console.log(`      └─ Cloud Build Builder Role: [GRANT roles/cloudbuild.builds.builder TO DEFAULT COMPUTE SERVICE ACCOUNT]`);
-  console.log(`  [ ] Looker User Attribute:`);
-  console.log(`      └─ nano_admin_admin_extension_nano_admin_challenge: [${status.attributeExists ? 'FORCE-UPDATED (OVERWRITTEN)' : 'NEWLY CREATED'}]`);
+  console.log(`  [ ] Looker User Attribute (per instance):`);
+  console.log(`      └─ nano_admin_admin_extension_nano_admin_challenge: [CREATE / FORCE-UPDATE ON ALL INSTANCES]`);
   console.log(`  [ ] Upload Extension Assets to GCS:`);
   console.log(`      └─ Destination: gs://${config.gcs_bucket_name}/`);
   console.log('======================================================');

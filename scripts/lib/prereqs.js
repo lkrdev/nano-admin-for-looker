@@ -81,20 +81,11 @@ async function checkGCPAuth() {
   }
 }
 
-function installDependencies() {
-  console.log('\n📦 Installing project dependencies via npm install...');
-  try {
-    execSync('npm install', { stdio: 'inherit' });
-    execSync('npm install --no-workspaces --prefix backend', { stdio: 'inherit' });
-    console.log('✅ Dependencies installed successfully.');
-  } catch (e) {
-    console.error('❌ Error: Failed to install project dependencies:', e.message);
-    process.exit(1);
-  }
-}
+const fs = require('fs');
+const path = require('path');
 
-async function checkPrerequisites() {
-  console.log('🔍 Checking prerequisites...');
+function validateLocalTooling() {
+  console.log('🔍 Phase 1: Validating local tooling (fast local checks)...');
 
   try {
     execSync('node --version', { stdio: 'ignore' });
@@ -121,14 +112,26 @@ async function checkPrerequisites() {
     process.exit(1);
   }
 
+  const rootNodeModules = path.join(__dirname, '..', '..', 'node_modules');
+  const backendNodeModules = path.join(__dirname, '..', '..', 'backend', 'node_modules');
+  const extensionNodeModules = path.join(__dirname, '..', '..', 'extension', 'node_modules');
+
+  if (!fs.existsSync(rootNodeModules) || !fs.existsSync(backendNodeModules) || !fs.existsSync(extensionNodeModules)) {
+    console.error('❌ Error: Required npm dependencies are missing.');
+    console.error('Please run "npm install" and "npm install --prefix backend" first before running the deployment script.');
+    process.exit(1);
+  }
+
+  console.log('✅ Local tooling check passed (Node/NPM, gcloud CLI, looker-cli, local node_modules).');
+}
+
+async function checkPrerequisites() {
+  validateLocalTooling();
   await checkGCPAuth();
-  console.log('✅ All prerequisites met (Node/NPM, gcloud CLI, looker-cli, GCP session).');
-  
-  installDependencies();
 }
 
 async function ensureLookerLoggedIn(connectionConfig) {
-  console.log('\n🔑 Checking Looker session status...');
+  console.log(`\n🔑 Checking Looker session status for host ${connectionConfig.looker_host}...`);
   let loggedIn = false;
   let lookerUser = 'Unknown User';
 
@@ -138,7 +141,7 @@ async function ensureLookerLoggedIn(connectionConfig) {
     lookerUser = `${userMe.display_name || userMe.first_name + ' ' + userMe.last_name} (${userMe.email})`;
     loggedIn = true;
   } catch (e) {
-    console.log('Not authenticated with Looker. Initiating login via OAuth PKCE...');
+    console.log(`Not authenticated with Looker host ${connectionConfig.looker_host}. Initiating login via OAuth PKCE...`);
     const loginArgs = ['session', 'login', '--oauth', `--host=${connectionConfig.looker_host}`, `--port=${connectionConfig.looker_port}`, `--ssl=${connectionConfig.looker_ssl}`];
     
     await runCommandFiltered('looker-cli', loginArgs);
@@ -155,7 +158,7 @@ async function ensureLookerLoggedIn(connectionConfig) {
   }
 
   if (!loggedIn) {
-    console.error('❌ Error: Could not authenticate with Looker.');
+    console.error(`❌ Error: Could not authenticate with Looker host ${connectionConfig.looker_host}.`);
     process.exit(1);
   }
 
@@ -165,8 +168,8 @@ async function ensureLookerLoggedIn(connectionConfig) {
 module.exports = {
   parseJsonFromStdout,
   runCommandFiltered,
+  validateLocalTooling,
   checkGCPAuth,
-  installDependencies,
   checkPrerequisites,
   ensureLookerLoggedIn
 };

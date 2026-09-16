@@ -32,44 +32,87 @@ function loadEnvFile() {
   }
 }
 
+function getLocalGCPDefaults() {
+  let defaultProject = '';
+  let defaultAccount = '';
+  try {
+    defaultProject = execSync('gcloud config get-value project', { encoding: 'utf8', stdio: 'pipe' }).trim();
+    if (defaultProject.includes('(unset)')) defaultProject = '';
+  } catch (e) {}
+  try {
+    defaultAccount = execSync('gcloud config get-value account', { encoding: 'utf8', stdio: 'pipe' }).trim();
+    if (defaultAccount.includes('(unset)')) defaultAccount = '';
+  } catch (e) {}
+  return { defaultProject, defaultAccount };
+}
+
 function loadConfig(configPath) {
   loadEnvFile();
   let config = {};
   if (fs.existsSync(configPath)) {
     try {
       config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      // Normalize legacy single-instance config to multi-instance structure
+      if (config.looker_host && !Array.isArray(config.instances)) {
+        config.instances = [
+          {
+            looker_host: config.looker_host,
+            looker_port: config.looker_port || '443',
+            looker_ssl: config.looker_ssl !== undefined ? config.looker_ssl : true,
+            looker_service_account: config.looker_service_account || '',
+            looker_credential_method: config.looker_credential_method || 'generate'
+          }
+        ];
+      }
     } catch (e) {
       console.warn('⚠️ Warning: Failed to parse deploy-config.json. Starting fresh.');
     }
+  }
+  if (!Array.isArray(config.instances)) {
+    config.instances = [];
   }
   return config;
 }
 
 function saveConfig(configPath, config) {
+  const safeInstances = (config.instances || []).map(inst => ({
+    looker_host: inst.looker_host,
+    looker_port: inst.looker_port || '443',
+    looker_ssl: inst.looker_ssl !== undefined ? inst.looker_ssl : true,
+    looker_service_account: inst.looker_service_account || '',
+    looker_credential_method: inst.looker_credential_method || 'generate'
+  }));
+
   const safeConfig = {
-    looker_host: config.looker_host,
-    looker_port: config.looker_port,
-    looker_ssl: config.looker_ssl,
     gcp_project_id: config.gcp_project_id,
     gcp_region: config.gcp_region,
     gcf_name: config.gcf_name,
     gcs_bucket_name: config.gcs_bucket_name,
-    looker_service_account: config.looker_service_account,
-    looker_credential_method: config.looker_credential_method,
+    instances: safeInstances
   };
+
+  // Backwards compatibility top-level fields for single instance
+  if (safeInstances.length > 0) {
+    safeConfig.looker_host = safeInstances[0].looker_host;
+    safeConfig.looker_port = safeInstances[0].looker_port;
+    safeConfig.looker_ssl = safeInstances[0].looker_ssl;
+    safeConfig.looker_service_account = safeInstances[0].looker_service_account;
+    safeConfig.looker_credential_method = safeInstances[0].looker_credential_method;
+  }
+
   fs.writeFileSync(configPath, JSON.stringify(safeConfig, null, 2), 'utf8');
   console.log('✅ Configuration saved to deploy-config.json (sensitive data omitted).');
 }
 
 function isConfigComplete(config) {
   return (
-    config.looker_host &&
-    config.looker_port &&
-    config.looker_ssl !== undefined &&
     config.gcp_project_id &&
     config.gcp_region &&
     config.gcf_name &&
-    config.gcs_bucket_name
+    config.gcs_bucket_name &&
+    Array.isArray(config.instances) &&
+    config.instances.length > 0 &&
+    config.instances.every(i => i.looker_host && i.looker_port && i.looker_ssl !== undefined)
   );
 }
 
@@ -78,19 +121,17 @@ async function decideUseSavedConfig(config) {
     return false;
   }
   
-  console.log('📄 Found existing deployment configuration:');
-  console.log(`  • Looker Host:            ${config.looker_host}`);
-  console.log(`  • Looker Port:            ${config.looker_port}`);
-  console.log(`  • Use SSL/HTTPS:          ${config.looker_ssl ? 'Yes' : 'No'}`);
+  console.log('\n📄 Phase 3: Found existing deployment configuration:');
   console.log(`  • GCP Project ID:         ${config.gcp_project_id}`);
   console.log(`  • GCP Region:             ${config.gcp_region}`);
   console.log(`  • Cloud Function Name:    ${config.gcf_name}`);
   console.log(`  • GCS Bucket Name:        ${config.gcs_bucket_name}`);
-  if (config.looker_service_account) {
-    console.log(`  • Looker Service Account: ${config.looker_service_account}`);
-  }
+  console.log(`  • Target Looker Instances (${config.instances.length}):`);
+  config.instances.forEach((inst, idx) => {
+    console.log(`      [${idx + 1}] Host: ${inst.looker_host}:${inst.looker_port} (SSL: ${inst.looker_ssl ? 'Yes' : 'No'})`);
+  });
 
-  const useSaved = await askQuestion('\nUse all saved settings for this deployment? (Y/n): ');
+  const useSaved = await askQuestion('\nUse saved settings for this deployment? (Y/n): ');
   const skipPrompts = useSaved.toLowerCase() !== 'n';
   
   if (skipPrompts) {
@@ -101,11 +142,7 @@ async function decideUseSavedConfig(config) {
 }
 
 function getSavedConnectionConfig(config) {
-  return {
-    looker_host: config.looker_host,
-    looker_port: config.looker_port,
-    looker_ssl: config.looker_ssl
-  };
+  return config.instances || [];
 }
 
 function getSavedGCPConfig(config) {
@@ -118,28 +155,29 @@ function getSavedGCPConfig(config) {
 }
 
 function getSavedServiceAccountConfig(config, checkSecretsFn) {
-  return {
-    looker_service_account: config.looker_service_account || '',
+  return (config.instances || []).map(inst => ({
+    looker_host: inst.looker_host,
+    looker_service_account: inst.looker_service_account || '',
     looker_credential_method: checkSecretsFn && checkSecretsFn(config.gcp_project_id) ? 'reuse' : 'generate',
     manual_client_id: '',
     manual_client_secret: ''
-  };
+  }));
 }
 
-async function promptLookerConnection(config) {
-  console.log('⚙️ Connecting to Looker...');
+async function promptLookerConnection(existingInstance = {}) {
+  console.log('⚙️ Configuring Looker target instance connection...');
   
-  const hostInput = await askQuestion(`Enter Looker API Host [${config.looker_host || 'your-instance.looker.app'}]: `);
-  const host = hostInput || config.looker_host;
+  const hostInput = await askQuestion(`Enter Looker API Host [${existingInstance.looker_host || 'your-instance.looker.app'}]: `);
+  const host = (hostInput || existingInstance.looker_host || '').trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
   if (!host) {
     console.error('❌ Error: Looker Host is required.');
     process.exit(1);
   }
   
-  const portInput = await askQuestion(`Enter Looker API Port [${config.looker_port || '443'}]: `);
-  const port = portInput || config.looker_port || '443';
+  const portInput = await askQuestion(`Enter Looker API Port [${existingInstance.looker_port || '443'}]: `);
+  const port = portInput || existingInstance.looker_port || '443';
   
-  const defaultSsl = config.looker_ssl !== undefined ? (config.looker_ssl ? 'Y' : 'n') : 'Y';
+  const defaultSsl = existingInstance.looker_ssl !== undefined ? (existingInstance.looker_ssl ? 'Y' : 'n') : 'Y';
   const sslInput = await askQuestion(`Use SSL (HTTPS)? (Y/n) [${defaultSsl}]: `);
   const ssl = sslInput === '' ? (defaultSsl === 'Y') : (sslInput.toLowerCase() !== 'n');
 
@@ -150,10 +188,10 @@ async function promptLookerConnection(config) {
   };
 }
 
-async function promptGCPConfig(config) {
-  console.log('\n⚙️ Configuring GCP settings...');
+async function promptGCPConfig(config, localDefaults = {}) {
+  console.log('\n⚙️ Phase 4: Configuring GCP settings...');
   
-  const defaultProj = config.gcp_project_id || '';
+  const defaultProj = config.gcp_project_id || localDefaults.defaultProject || '';
   const projectId = await askQuestion(`Enter GCP Project ID [${defaultProj}]: `);
   const finalProjectId = projectId || defaultProj;
   if (!finalProjectId) {
@@ -179,10 +217,10 @@ async function promptGCPConfig(config) {
   };
 }
 
-async function promptLookerServiceAccount(connectionConfig, gcpConfig, config, checkSecretsFn) {
+async function promptLookerServiceAccount(connectionConfig, gcpConfig, existingConfig = {}, checkSecretsFn) {
   const secretsExist = checkSecretsFn && checkSecretsFn(gcpConfig.gcp_project_id);
 
-  console.log('\n🔎 Eagerly scanning Looker for matching service accounts...');
+  console.log(`\n🔎 Inspecting Looker host ${connectionConfig.looker_host} for existing service accounts...`);
   let matchedSAs = [];
   try {
     const out = execSync(`looker-cli api user search_users --is_service_account=true --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
@@ -226,7 +264,7 @@ async function promptLookerServiceAccount(connectionConfig, gcpConfig, config, c
     });
   });
 
-  console.log('\nHow should the Looker Service Account & API credentials be configured?');
+  console.log(`\nHow should credentials be configured for Looker host ${connectionConfig.looker_host}?`);
   options.forEach((opt, idx) => {
     console.log(`  ${idx + 1} = ${opt.text}`);
   });
@@ -266,6 +304,7 @@ async function promptLookerServiceAccount(connectionConfig, gcpConfig, config, c
   }
 
   return {
+    looker_host: connectionConfig.looker_host,
     looker_service_account,
     looker_credential_method,
     manual_client_id,
@@ -274,6 +313,7 @@ async function promptLookerServiceAccount(connectionConfig, gcpConfig, config, c
 }
 
 module.exports = {
+  getLocalGCPDefaults,
   loadConfig,
   saveConfig,
   isConfigComplete,

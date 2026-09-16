@@ -203,30 +203,48 @@ async function deployGCF(config, lookerCreds) {
     }
 
     if (lookerCreds) {
-      console.log('Configuring LOOKERSDK_CLIENT_ID in Secret Manager...');
-      try {
-        execSync('gcloud secrets describe LOOKERSDK_CLIENT_ID', { stdio: 'ignore' });
-      } catch (e) {
-        try {
-          execSync('gcloud secrets create LOOKERSDK_CLIENT_ID --replication-policy="automatic"', { stdio: 'inherit' });
-        } catch (err) {}
-      }
-      execSync(`echo -n "${lookerCreds.clientId}" | gcloud secrets versions add LOOKERSDK_CLIENT_ID --data-file=-`, { stdio: 'inherit' });
+      const instancesConfigJson = typeof lookerCreds === 'object' && lookerCreds.instances
+        ? JSON.stringify(lookerCreds.instances)
+        : JSON.stringify(lookerCreds);
 
-      console.log('Configuring LOOKERSDK_CLIENT_SECRET in Secret Manager...');
+      console.log('Configuring LOOKER_INSTANCES_CONFIG in Secret Manager...');
       try {
-        execSync('gcloud secrets describe LOOKERSDK_CLIENT_SECRET', { stdio: 'ignore' });
+        execSync('gcloud secrets describe LOOKER_INSTANCES_CONFIG', { stdio: 'ignore' });
       } catch (e) {
         try {
-          execSync('gcloud secrets create LOOKERSDK_CLIENT_SECRET --replication-policy="automatic"', { stdio: 'inherit' });
+          execSync('gcloud secrets create LOOKER_INSTANCES_CONFIG --replication-policy="automatic"', { stdio: 'inherit' });
         } catch (err) {}
       }
-      execSync(`echo -n "${lookerCreds.clientSecret}" | gcloud secrets versions add LOOKERSDK_CLIENT_SECRET --data-file=-`, { stdio: 'inherit' });
+      execSync(`echo -n '${instancesConfigJson}' | gcloud secrets versions add LOOKER_INSTANCES_CONFIG --data-file=-`, { stdio: 'inherit' });
+
+      // Legacy fallback for single instance if single clientId/clientSecret provided
+      if (lookerCreds.clientId && lookerCreds.clientSecret) {
+        console.log('Configuring LOOKERSDK_CLIENT_ID in Secret Manager...');
+        try {
+          execSync('gcloud secrets describe LOOKERSDK_CLIENT_ID', { stdio: 'ignore' });
+        } catch (e) {
+          try {
+            execSync('gcloud secrets create LOOKERSDK_CLIENT_ID --replication-policy="automatic"', { stdio: 'inherit' });
+          } catch (err) {}
+        }
+        execSync(`echo -n "${lookerCreds.clientId}" | gcloud secrets versions add LOOKERSDK_CLIENT_ID --data-file=-`, { stdio: 'inherit' });
+
+        console.log('Configuring LOOKERSDK_CLIENT_SECRET in Secret Manager...');
+        try {
+          execSync('gcloud secrets describe LOOKERSDK_CLIENT_SECRET', { stdio: 'ignore' });
+        } catch (e) {
+          try {
+            execSync('gcloud secrets create LOOKERSDK_CLIENT_SECRET --replication-policy="automatic"', { stdio: 'inherit' });
+          } catch (err) {}
+        }
+        execSync(`echo -n "${lookerCreds.clientSecret}" | gcloud secrets versions add LOOKERSDK_CLIENT_SECRET --data-file=-`, { stdio: 'inherit' });
+      }
     }
 
     console.log(`Granting Secret Accessor permission to default Compute Service Account: ${defaultSa}...`);
     try {
       execSync(`gcloud secrets add-iam-policy-binding GCF_HMAC_SECRET --member="serviceAccount:${defaultSa}" --role="roles/secretmanager.secretAccessor" --project=${config.gcp_project_id}`, { stdio: 'ignore' });
+      execSync(`gcloud secrets add-iam-policy-binding LOOKER_INSTANCES_CONFIG --member="serviceAccount:${defaultSa}" --role="roles/secretmanager.secretAccessor" --project=${config.gcp_project_id}`, { stdio: 'ignore' });
       execSync(`gcloud secrets add-iam-policy-binding LOOKERSDK_CLIENT_ID --member="serviceAccount:${defaultSa}" --role="roles/secretmanager.secretAccessor" --project=${config.gcp_project_id}`, { stdio: 'ignore' });
       execSync(`gcloud secrets add-iam-policy-binding LOOKERSDK_CLIENT_SECRET --member="serviceAccount:${defaultSa}" --role="roles/secretmanager.secretAccessor" --project=${config.gcp_project_id}`, { stdio: 'ignore' });
     } catch (e) {
@@ -240,6 +258,9 @@ async function deployGCF(config, lookerCreds) {
   console.log('\n📦 Compiling backend TypeScript code...');
   execSync('npm run backend:build', { stdio: 'inherit' });
 
+  const primaryHost = (config.instances && config.instances.length > 0) ? config.instances[0].looker_host : config.looker_host;
+  const primaryPort = (config.instances && config.instances.length > 0) ? config.instances[0].looker_port : config.looker_port;
+
   console.log(`\n🚀 Deploying Cloud Function: ${config.gcf_name} to region ${config.gcp_region}...`);
   const deployCommand = `gcloud functions deploy ${config.gcf_name} \\
     --gen2 \\
@@ -249,8 +270,8 @@ async function deployGCF(config, lookerCreds) {
     --allow-unauthenticated \\
     --entry-point=nanoAdminBackend \\
     --source=backend \\
-    --set-env-vars="LOOKERSDK_BASE_URL=https://${config.looker_host}:${config.looker_port},BUILD_HASH=${localBuildHash}" \\
-    --set-secrets="LOOKERSDK_CLIENT_ID=LOOKERSDK_CLIENT_ID:latest,LOOKERSDK_CLIENT_SECRET=LOOKERSDK_CLIENT_SECRET:latest,GCF_HMAC_SECRET=GCF_HMAC_SECRET:latest"`;
+    --set-env-vars="LOOKERSDK_BASE_URL=https://${primaryHost}:${primaryPort},BUILD_HASH=${localBuildHash}" \\
+    --set-secrets="LOOKER_INSTANCES_CONFIG=LOOKER_INSTANCES_CONFIG:latest,LOOKERSDK_CLIENT_ID=LOOKERSDK_CLIENT_ID:latest,LOOKERSDK_CLIENT_SECRET=LOOKERSDK_CLIENT_SECRET:latest,GCF_HMAC_SECRET=GCF_HMAC_SECRET:latest"`;
 
   console.log(`Running deploy command:\n${deployCommand}\n`);
   try {
