@@ -3,6 +3,16 @@ const path = require('path');
 const { execSync, spawn } = require('child_process');
 const crypto = require('crypto');
 
+function sanitizeHostForSecret(host) {
+  const cleanHost = (host || '').trim().toLowerCase();
+  let sanitized = cleanHost.replace(/[^a-z0-9]/g, '_');
+  if (sanitized.length > 180) {
+    const hash = crypto.createHash('sha256').update(cleanHost).digest('hex').substring(0, 16);
+    sanitized = `${sanitized.substring(0, 180)}_${hash}`;
+  }
+  return sanitized;
+}
+
 function loadLocalBuildHash() {
   let hash = '';
   try {
@@ -34,11 +44,19 @@ function resolveGcfUrl(config) {
   return gcfUrl;
 }
 
-function checkSecretsExistInGCP(projectId) {
+function checkSecretsExistInGCP(projectId, instances = []) {
   if (!projectId) return false;
+  const targetHosts = Array.isArray(instances) && instances.length > 0
+    ? instances.map(i => i.looker_host || i)
+    : [];
+  if (targetHosts.length === 0) return false;
+
   try {
-    execSync(`gcloud secrets describe LOOKERSDK_CLIENT_ID --project=${projectId}`, { stdio: 'ignore' });
-    execSync(`gcloud secrets describe LOOKERSDK_CLIENT_SECRET --project=${projectId}`, { stdio: 'ignore' });
+    for (const host of targetHosts) {
+      const sanitizedHost = sanitizeHostForSecret(host);
+      execSync(`gcloud secrets describe NANO_ADMIN_LOOKERSDK_CLIENT_ID_${sanitizedHost} --project=${projectId}`, { stdio: 'ignore' });
+      execSync(`gcloud secrets describe NANO_ADMIN_LOOKERSDK_CLIENT_SECRET_${sanitizedHost} --project=${projectId}`, { stdio: 'ignore' });
+    }
     return true;
   } catch (e) {
     return false;
@@ -58,17 +76,7 @@ async function scanExistingResources(config, getLookerSaFn) {
   }
 
   console.log('🔎 Scanning GCP environment for existing resources...');
-  let secretClientIdExists = false;
-  let secretClientSecretExists = false;
   let secretHmacExists = false;
-  try {
-    execSync(`gcloud secrets describe LOOKERSDK_CLIENT_ID --project=${config.gcp_project_id}`, { stdio: 'ignore' });
-    secretClientIdExists = true;
-  } catch (e) {}
-  try {
-    execSync(`gcloud secrets describe LOOKERSDK_CLIENT_SECRET --project=${config.gcp_project_id}`, { stdio: 'ignore' });
-    secretClientSecretExists = true;
-  } catch (e) {}
   try {
     execSync(`gcloud secrets describe GCF_HMAC_SECRET --project=${config.gcp_project_id}`, { stdio: 'ignore' });
     secretHmacExists = true;
@@ -80,20 +88,11 @@ async function scanExistingResources(config, getLookerSaFn) {
     functionExists = true;
   } catch (e) {}
 
-  let attributeExists = false;
-  try {
-    execSync(`looker-cli attribute cat nano_admin_admin_extension_nano_admin_challenge --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`, { stdio: 'ignore' });
-    attributeExists = true;
-  } catch (e) {}
-
   return {
     gcpAccount,
     targetLookerSa,
-    secretClientIdExists,
-    secretClientSecretExists,
     secretHmacExists,
-    functionExists,
-    attributeExists
+    functionExists
   };
 }
 
@@ -156,6 +155,9 @@ function printDrsTroubleshootingGuide(projectId) {
 async function deployGCF(config, lookerCreds) {
   console.log('\n☁️ Setting up Google Cloud deployment...');
 
+  console.log('\n📦 Compiling backend TypeScript code and generating build hash...');
+  execSync('npm run backend:build', { stdio: 'inherit' });
+
   const localBuildHash = loadLocalBuildHash();
   console.log(`Local Build Hash is: ${localBuildHash}`);
 
@@ -173,15 +175,18 @@ async function deployGCF(config, lookerCreds) {
   const defaultSa = `${projectNumber}-compute@developer.gserviceaccount.com`;
   console.log(`Default Compute Engine service account: ${defaultSa}`);
 
-  console.log(`Ensuring Cloud Build Builder permission for default Compute Service Account: ${defaultSa}...`);
+  console.log(`Ensuring Secret Accessor permission for default Compute Service Account: ${defaultSa}...`);
   try {
-    execSync(`gcloud projects add-iam-policy-binding ${config.gcp_project_id} --member="serviceAccount:${defaultSa}" --role="roles/cloudbuild.builds.builder"`, { stdio: 'ignore' });
-    console.log('✅ Granted roles/cloudbuild.builds.builder permission.');
+    execSync(`gcloud projects add-iam-policy-binding ${config.gcp_project_id} --member="serviceAccount:${defaultSa}" --role="roles/secretmanager.secretAccessor"`, { stdio: 'ignore' });
+    console.log('✅ Granted roles/secretmanager.secretAccessor permission.');
   } catch (e) {
-    console.warn('⚠️ Warning: Failed to automatically grant Cloud Build Builder permission. This may cause deployment warnings or failures.');
+    console.warn('⚠️ Warning: Failed to grant project-level Secret Accessor permission automatically.');
   }
 
   let secretManagerError = null;
+  const secretBindings = [
+    'GCF_HMAC_SECRET=GCF_HMAC_SECRET:latest'
+  ];
 
   try {
     let hasHmac = false;
@@ -202,61 +207,47 @@ async function deployGCF(config, lookerCreds) {
       execSync(`echo -n "${hmacSecret}" | gcloud secrets versions add GCF_HMAC_SECRET --data-file=-`, { stdio: 'inherit' });
     }
 
+    const instances = Array.isArray(config.instances) && config.instances.length > 0
+      ? config.instances
+      : [{ looker_host: config.looker_host, looker_port: config.looker_port, looker_ssl: config.looker_ssl }];
+
     if (lookerCreds) {
-      const instancesConfigJson = typeof lookerCreds === 'object' && lookerCreds.instances
-        ? JSON.stringify(lookerCreds.instances)
-        : JSON.stringify(lookerCreds);
+      const multiMap = typeof lookerCreds === 'object' && lookerCreds.instances ? lookerCreds.instances : lookerCreds;
 
-      console.log('Configuring LOOKER_INSTANCES_CONFIG in Secret Manager...');
-      try {
-        execSync('gcloud secrets describe LOOKER_INSTANCES_CONFIG', { stdio: 'ignore' });
-      } catch (e) {
-        try {
-          execSync('gcloud secrets create LOOKER_INSTANCES_CONFIG --replication-policy="automatic"', { stdio: 'inherit' });
-        } catch (err) {}
-      }
-      execSync(`echo -n '${instancesConfigJson}' | gcloud secrets versions add LOOKER_INSTANCES_CONFIG --data-file=-`, { stdio: 'inherit' });
+      for (const inst of instances) {
+        const host = inst.looker_host;
+        const creds = multiMap[host] || (host === config.looker_host ? lookerCreds : null);
+        const sanitizedHost = sanitizeHostForSecret(host);
+        const clientIdSecret = `NANO_ADMIN_LOOKERSDK_CLIENT_ID_${sanitizedHost}`;
+        const clientSecretSecret = `NANO_ADMIN_LOOKERSDK_CLIENT_SECRET_${sanitizedHost}`;
 
-      // Legacy fallback for single instance if single clientId/clientSecret provided
-      if (lookerCreds.clientId && lookerCreds.clientSecret) {
-        console.log('Configuring LOOKERSDK_CLIENT_ID in Secret Manager...');
-        try {
-          execSync('gcloud secrets describe LOOKERSDK_CLIENT_ID', { stdio: 'ignore' });
-        } catch (e) {
-          try {
-            execSync('gcloud secrets create LOOKERSDK_CLIENT_ID --replication-policy="automatic"', { stdio: 'inherit' });
-          } catch (err) {}
+        if (creds && creds.client_id && creds.client_secret) {
+          console.log(`Configuring Secret Manager secret ${clientIdSecret}...`);
+          try { execSync(`gcloud secrets describe ${clientIdSecret} --project=${config.gcp_project_id}`, { stdio: 'ignore' }); }
+          catch (e) { try { execSync(`gcloud secrets create ${clientIdSecret} --replication-policy="automatic" --project=${config.gcp_project_id}`, { stdio: 'inherit' }); } catch (err) {} }
+          execSync(`echo -n "${creds.client_id}" | gcloud secrets versions add ${clientIdSecret} --project=${config.gcp_project_id} --data-file=-`, { stdio: 'inherit' });
+
+          console.log(`Configuring Secret Manager secret ${clientSecretSecret}...`);
+          try { execSync(`gcloud secrets describe ${clientSecretSecret} --project=${config.gcp_project_id}`, { stdio: 'ignore' }); }
+          catch (e) { try { execSync(`gcloud secrets create ${clientSecretSecret} --replication-policy="automatic" --project=${config.gcp_project_id}`, { stdio: 'inherit' }); } catch (err) {} }
+          execSync(`echo -n "${creds.client_secret}" | gcloud secrets versions add ${clientSecretSecret} --project=${config.gcp_project_id} --data-file=-`, { stdio: 'inherit' });
+        } else {
+          console.log(`✅ Reusing existing Secret Manager secrets for host: ${host} (${clientIdSecret}, ${clientSecretSecret})`);
         }
-        execSync(`echo -n "${lookerCreds.clientId}" | gcloud secrets versions add LOOKERSDK_CLIENT_ID --data-file=-`, { stdio: 'inherit' });
 
-        console.log('Configuring LOOKERSDK_CLIENT_SECRET in Secret Manager...');
+        secretBindings.push(`${clientIdSecret}=${clientIdSecret}:latest`);
+        secretBindings.push(`${clientSecretSecret}=${clientSecretSecret}:latest`);
+
         try {
-          execSync('gcloud secrets describe LOOKERSDK_CLIENT_SECRET', { stdio: 'ignore' });
-        } catch (e) {
-          try {
-            execSync('gcloud secrets create LOOKERSDK_CLIENT_SECRET --replication-policy="automatic"', { stdio: 'inherit' });
-          } catch (err) {}
-        }
-        execSync(`echo -n "${lookerCreds.clientSecret}" | gcloud secrets versions add LOOKERSDK_CLIENT_SECRET --data-file=-`, { stdio: 'inherit' });
+          execSync(`gcloud secrets add-iam-policy-binding ${clientIdSecret} --member="serviceAccount:${defaultSa}" --role="roles/secretmanager.secretAccessor" --project=${config.gcp_project_id}`, { stdio: 'ignore' });
+          execSync(`gcloud secrets add-iam-policy-binding ${clientSecretSecret} --member="serviceAccount:${defaultSa}" --role="roles/secretmanager.secretAccessor" --project=${config.gcp_project_id}`, { stdio: 'ignore' });
+        } catch (e) {}
       }
-    }
-
-    console.log(`Granting Secret Accessor permission to default Compute Service Account: ${defaultSa}...`);
-    try {
-      execSync(`gcloud secrets add-iam-policy-binding GCF_HMAC_SECRET --member="serviceAccount:${defaultSa}" --role="roles/secretmanager.secretAccessor" --project=${config.gcp_project_id}`, { stdio: 'ignore' });
-      execSync(`gcloud secrets add-iam-policy-binding LOOKER_INSTANCES_CONFIG --member="serviceAccount:${defaultSa}" --role="roles/secretmanager.secretAccessor" --project=${config.gcp_project_id}`, { stdio: 'ignore' });
-      execSync(`gcloud secrets add-iam-policy-binding LOOKERSDK_CLIENT_ID --member="serviceAccount:${defaultSa}" --role="roles/secretmanager.secretAccessor" --project=${config.gcp_project_id}`, { stdio: 'ignore' });
-      execSync(`gcloud secrets add-iam-policy-binding LOOKERSDK_CLIENT_SECRET --member="serviceAccount:${defaultSa}" --role="roles/secretmanager.secretAccessor" --project=${config.gcp_project_id}`, { stdio: 'ignore' });
-    } catch (e) {
-      console.warn('⚠️ Warning: Failed to grant Secret Accessor permission automatically. Make sure the default compute service account has roles/secretmanager.secretAccessor role.');
     }
   } catch (smErr) {
     secretManagerError = smErr.message;
     console.warn(`⚠️ Warning: Secret Manager provisioning encountered an issue: ${smErr.message}`);
   }
-
-  console.log('\n📦 Compiling backend TypeScript code...');
-  execSync('npm run backend:build', { stdio: 'inherit' });
 
   const primaryHost = (config.instances && config.instances.length > 0) ? config.instances[0].looker_host : config.looker_host;
   const primaryPort = (config.instances && config.instances.length > 0) ? config.instances[0].looker_port : config.looker_port;
@@ -271,7 +262,7 @@ async function deployGCF(config, lookerCreds) {
     --entry-point=nanoAdminBackend \\
     --source=backend \\
     --set-env-vars="LOOKERSDK_BASE_URL=https://${primaryHost}:${primaryPort},BUILD_HASH=${localBuildHash}" \\
-    --set-secrets="LOOKER_INSTANCES_CONFIG=LOOKER_INSTANCES_CONFIG:latest,LOOKERSDK_CLIENT_ID=LOOKERSDK_CLIENT_ID:latest,LOOKERSDK_CLIENT_SECRET=LOOKERSDK_CLIENT_SECRET:latest,GCF_HMAC_SECRET=GCF_HMAC_SECRET:latest"`;
+    --set-secrets="${secretBindings.join(',')}"`;
 
   console.log(`Running deploy command:\n${deployCommand}\n`);
   try {
@@ -378,6 +369,7 @@ async function deployExtensionToGCS(config) {
 }
 
 module.exports = {
+  sanitizeHostForSecret,
   loadLocalBuildHash,
   resolveGcfUrl,
   checkSecretsExistInGCP,

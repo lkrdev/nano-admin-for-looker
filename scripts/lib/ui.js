@@ -1,4 +1,5 @@
 const readline = require('readline');
+const { sanitizeHostForSecret } = require('./gcp');
 
 function askQuestion(query) {
   const rl = readline.createInterface({
@@ -56,16 +57,19 @@ function printDeploymentPreview(config, lookerUsers, status) {
     console.log(`      └─ Active Session:    ${user}`);
   });
 
-  let clientIdAction = status.secretClientIdExists ? 'UPDATED (NEW VERSION ADDED)' : 'NEWLY CREATED';
-  let clientSecretAction = status.secretClientSecretExists ? 'UPDATED (NEW VERSION ADDED)' : 'NEWLY CREATED';
-
   console.log('\nDeployment Actions & Resource Overwrites (Pending Phase 7 Execution):');
   console.log('  [ ] Compile backend TypeScript code');
   console.log('  [ ] Compile & package extension React bundle');
   console.log(`  [ ] Deploy Google Cloud Function:`);
   console.log(`      └─ Status: ${config.gcf_name} will be [${status.functionExists ? 'OVERWRITTEN / RE-DEPLOYED' : 'NEWLY CREATED'}]`);
   console.log(`  [ ] Secret Manager Provisioning & IAM Setup:`);
-  console.log(`      ├─ LOOKER_INSTANCES_CONFIG: [NEWLY CREATED / UPDATED WITH MULTI-INSTANCE MAP]`);
+  instances.forEach((inst) => {
+    const sanHost = sanitizeHostForSecret(inst.looker_host);
+    const isNew = inst.looker_credential_method === 'generate' || inst.looker_credential_method === 'manual';
+    const actionLabel = isNew ? 'CREATE / UPDATE NEW VERSION' : 'REUSED (UNTOUCHED)';
+    console.log(`      ├─ NANO_ADMIN_LOOKERSDK_CLIENT_ID_${sanHost}: [${actionLabel}]`);
+    console.log(`      ├─ NANO_ADMIN_LOOKERSDK_CLIENT_SECRET_${sanHost}: [${actionLabel}]`);
+  });
   console.log(`      ├─ GCF_HMAC_SECRET:         [${status.secretHmacExists ? 'REUSED (UNTOUCHED)' : 'NEWLY CREATED'}]`);
   console.log(`      └─ Secret Accessor Role:    [GRANT ACCESS TO DEFAULT GCP COMPUTE SERVICE ACCOUNT]`);
   console.log(`  [ ] GCP Project IAM Setup:`);
@@ -87,29 +91,50 @@ function printDeploymentCancelled() {
 }
 
 function printDeploymentSuccess(config, manifestContent, gcfUrl, isManifestUpToDate = false) {
-  const protocol = config.looker_ssl ? 'https' : 'http';
-  const lookerIdeUrl = `${protocol}://${config.looker_host}/projects/nano_admin/files/manifest.lkml`;
-  const extensionUrl = `${protocol}://${config.looker_host}/extensions/nano_admin::admin_extension`;
+  const instances = Array.isArray(config.instances) && config.instances.length > 0
+    ? config.instances
+    : [{ looker_host: config.looker_host, looker_port: config.looker_port, looker_ssl: config.looker_ssl }];
 
   console.log('\n🎉 Deployment and setup completed successfully! 🎉');
   console.log('----------------------------------------------------');
 
   if (isManifestUpToDate) {
-    console.log('✅ Production manifest.lkml in Looker already matches the required configuration. No action needed!');
-    console.log('\nNext Steps:');
-    console.log(`1. Open Looker, load the Nano Admin extension, and test the functionality.`);
-    console.log(`   👉 Link: ${extensionUrl}`);
+    console.log('✅ Production manifest.lkml in Looker matches the required configuration across all instances. No action needed!');
+    console.log('\nTarget Looker Extension Links:');
+    instances.forEach((inst, idx) => {
+      const protocol = inst.looker_ssl ? 'https' : 'http';
+      const hostPort = (inst.looker_port && String(inst.looker_port) !== '443' && String(inst.looker_port) !== '80')
+        ? `${inst.looker_host}:${inst.looker_port}`
+        : inst.looker_host;
+      const extensionUrl = `${protocol}://${hostPort}/extensions/nano_admin::admin_extension`;
+      console.log(`  [Instance ${idx + 1}] ${inst.looker_host}`);
+      console.log(`      👉 Link: ${extensionUrl}`);
+    });
   } else {
-    console.log('Next Steps:');
-    console.log(`1. Open your Looker project manifest in the Looker IDE:`);
-    console.log(`   👉 Link: ${lookerIdeUrl}`);
+    console.log('\n⚠️  ACTION REQUIRED FOR LOOKER MANIFEST:');
+    console.log(`1. Open your Looker project manifest in project "nano_admin":`);
+    instances.forEach((inst, idx) => {
+      const protocol = inst.looker_ssl ? 'https' : 'http';
+      const hostPort = (inst.looker_port && String(inst.looker_port) !== '443' && String(inst.looker_port) !== '80')
+        ? `${inst.looker_host}:${inst.looker_port}`
+        : inst.looker_host;
+      const lookerIdeUrl = `${protocol}://${hostPort}/projects/nano_admin/files/manifest.lkml`;
+      console.log(`   👉 [Instance ${idx + 1}] ${inst.looker_host}: ${lookerIdeUrl}`);
+    });
     console.log('\n2. Edit or create your "manifest.lkml" file and replace its content with the following:');
     console.log('\n----------------- COPY FROM HERE -----------------');
     console.log(manifestContent || 'manifest.lkml content could not be read.');
     console.log('------------------ COPY TO HERE ------------------\n');
-    console.log('3. Commit, push, and deploy these manifest changes to production in your Looker project.');
+    console.log('3. Commit, push, and deploy these manifest changes to production in your Looker project(s).');
     console.log(`4. Open Looker, load the Nano Admin extension, and test the functionality:`);
-    console.log(`   👉 Link: ${extensionUrl}`);
+    instances.forEach((inst, idx) => {
+      const protocol = inst.looker_ssl ? 'https' : 'http';
+      const hostPort = (inst.looker_port && String(inst.looker_port) !== '443' && String(inst.looker_port) !== '80')
+        ? `${inst.looker_host}:${inst.looker_port}`
+        : inst.looker_host;
+      const extensionUrl = `${protocol}://${hostPort}/extensions/nano_admin::admin_extension`;
+      console.log(`   👉 [Instance ${idx + 1}] ${inst.looker_host}: ${extensionUrl}`);
+    });
   }
   console.log('----------------------------------------------------');
 }
