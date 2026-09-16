@@ -813,10 +813,12 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
         action,
         ...payload
       };
+      const lookerHost = (extensionSDK as any)?.lookerHostData?.hostUrl || (extensionSDK as any)?.lookerHostData?.hostOrigin || '';
       const headers = {
         'Content-Type': 'application/json',
         'Authorization': `looker-attribute-challenge ${extensionSDK.createSecretKeyTag('nano_admin_challenge')}`,
-        'X-Looker-User-ID': currentUser ? String(currentUser.id) : ''
+        'X-Looker-User-ID': currentUser ? String(currentUser.id) : '',
+        'X-Looker-Instance-Host': lookerHost
       };
 
       let response = await extensionSDK.serverProxy(BACKEND_URL, {
@@ -969,10 +971,12 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
       const payload = {
         action: 'get_workflows'
       };
+      const lookerHost = (extensionSDK as any)?.lookerHostData?.hostUrl || (extensionSDK as any)?.lookerHostData?.hostOrigin || '';
       const headers = {
         'Content-Type': 'application/json',
         'Authorization': `looker-attribute-challenge ${extensionSDK.createSecretKeyTag('nano_admin_challenge')}`,
-        'X-Looker-User-ID': userId
+        'X-Looker-User-ID': userId,
+        'X-Looker-Instance-Host': lookerHost
       };
       
       let response = await extensionSDK.serverProxy(BACKEND_URL, {
@@ -1039,10 +1043,12 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
         workflowAction,
         payload
       };
+      const lookerHost = (extensionSDK as any)?.lookerHostData?.hostUrl || (extensionSDK as any)?.lookerHostData?.hostOrigin || '';
       const headers = {
         'Content-Type': 'application/json',
         'Authorization': `looker-attribute-challenge ${extensionSDK.createSecretKeyTag('nano_admin_challenge')}`,
-        'X-Looker-User-ID': currentUser ? String(currentUser.id) : ''
+        'X-Looker-User-ID': currentUser ? String(currentUser.id) : '',
+        'X-Looker-Instance-Host': lookerHost
       };
 
       let response = await extensionSDK.serverProxy(BACKEND_URL, {

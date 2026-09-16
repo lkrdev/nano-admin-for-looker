@@ -8,6 +8,7 @@ const {
   printDeploymentSuccess
 } = require('./lib/ui');
 const {
+  getLocalGCPDefaults,
   loadConfig,
   saveConfig,
   isConfigComplete,
@@ -20,7 +21,8 @@ const {
   promptLookerServiceAccount
 } = require('./lib/config');
 const {
-  checkPrerequisites,
+  validateLocalTooling,
+  checkGCPAuth,
   ensureLookerLoggedIn
 } = require('./lib/prereqs');
 const {
@@ -54,12 +56,16 @@ async function runDeployment() {
 
 async function runValidationModePipeline() {
   logDeployStep('Validation Mode', 'Starting validate-only check');
-  await checkPrerequisites();
+  validateLocalTooling();
+  await checkGCPAuth();
 
   const config = loadConfig(CONFIG_PATH);
   ensureConfigCompleteness(config);
 
-  await ensureLookerLoggedIn(config);
+  for (const inst of config.instances || []) {
+    await ensureLookerLoggedIn(inst);
+  }
+
   const gcfUrl = resolveGcfUrl(config);
   const results = await runPostDeploymentVerification(config, gcfUrl);
 
@@ -69,24 +75,49 @@ async function runValidationModePipeline() {
 async function runFullDeploymentPipeline() {
   printHeader();
   logDeployStep('Initialization', 'Starting deployment run');
-  await checkPrerequisites();
 
+  // Step 1: Validate local tooling (fast, no network, fail fast)
+  validateLocalTooling();
+
+  // Step 2: Collect local settings for defaults or full re-use
+  const localDefaults = getLocalGCPDefaults();
   const config = loadConfig(CONFIG_PATH);
+
+  // Step 3: If complete, offer to re-use saved config
   const skipPrompts = await decideUseSavedConfig(config);
 
-  const connectionConfig = await resolveConnectionConfig(config, skipPrompts);
-  const gcpConfig = await resolveGCPConfig(config, skipPrompts);
-  const saConfig = await resolveServiceAccountConfig(connectionConfig, gcpConfig, config, skipPrompts);
+  // Step 4: Prompt & validate target environments & deployment accounts
+  await checkGCPAuth();
+  const gcpConfig = skipPrompts ? getSavedGCPConfig(config) : await promptGCPConfig(config, localDefaults);
 
-  const lookerUser = await ensureLookerLoggedIn(connectionConfig);
-  const lookerCreds = await getLookerCredentials(connectionConfig, saConfig);
+  const targetConnections = skipPrompts ? getSavedConnectionConfig(config) : await resolveInstanceConnections(config);
+  const lookerUsers = [];
+  for (const conn of targetConnections) {
+    const user = await ensureLookerLoggedIn(conn);
+    lookerUsers.push({ host: conn.looker_host, user });
+  }
 
-  const mergedConfig = assembleMergedConfig(connectionConfig, saConfig, gcpConfig);
-  saveConfig(CONFIG_PATH, mergedConfig);
-  logDeployStep('Configuration Saved', extractSanitizedConfigSummary(mergedConfig));
+  // Step 5: Service Configuration & Service Accounts (In-Memory Only, Non-Mutating)
+  const saConfigs = [];
+  for (const conn of targetConnections) {
+    const existingInst = (config.instances || []).find(i => i.looker_host === conn.looker_host) || {};
+    const saCfg = skipPrompts
+      ? {
+          looker_host: conn.looker_host,
+          looker_service_account: existingInst.looker_service_account || '',
+          looker_credential_method: checkSecretsExistInGCP(gcpConfig.gcp_project_id) ? 'reuse' : 'generate',
+          manual_client_id: '',
+          manual_client_secret: ''
+        }
+      : await promptLookerServiceAccount(conn, gcpConfig, existingInst, checkSecretsExistInGCP);
+    saConfigs.push(saCfg);
+  }
 
+  const mergedConfig = assembleMergedConfig(targetConnections, saConfigs, gcpConfig);
+
+  // Step 6: Review & Confirm
   const resourceStatus = await scanExistingResources(mergedConfig, getLookerSaById);
-  printDeploymentPreview(mergedConfig, lookerUser, resourceStatus);
+  printDeploymentPreview(mergedConfig, lookerUsers, resourceStatus);
 
   const confirmed = await askConfirmation();
   if (!confirmed) {
@@ -94,10 +125,37 @@ async function runFullDeploymentPipeline() {
     return;
   }
 
+  // Step 7: Execute (Mutations)
   logDeployStep('Operations Started');
 
-  const { gcfUrl, secretManagerError } = await deployGCF(mergedConfig, lookerCreds);
+  saveConfig(CONFIG_PATH, mergedConfig);
+  logDeployStep('Configuration Saved', extractSanitizedConfigSummary(mergedConfig));
+
+  const multiInstanceCreds = {};
+  for (let i = 0; i < mergedConfig.instances.length; i++) {
+    const inst = mergedConfig.instances[i];
+    const saCfg = saConfigs[i];
+    const creds = await getLookerCredentials(inst, saCfg);
+    multiInstanceCreds[inst.looker_host] = {
+      base_url: `https://${inst.looker_host}:${inst.looker_port}`,
+      port: inst.looker_port,
+      verify_ssl: inst.looker_ssl,
+      client_id: creds?.clientId || '',
+      client_secret: creds?.clientSecret || ''
+    };
+    // Mark credential method as 'reuse' for subsequent deployment runs
+    mergedConfig.instances[i].looker_credential_method = 'reuse';
+    if (creds?.serviceAccountId) {
+      mergedConfig.instances[i].looker_service_account = String(creds.serviceAccountId);
+    }
+  }
+
+  const { gcfUrl, secretManagerError } = await deployGCF(mergedConfig, { instances: multiInstanceCreds });
   logDeployStep('GCF Deployed', { gcfUrl, secretManagerError });
+
+  // Update deploy-config.json on disk with credential method set to 'reuse' for future runs
+  saveConfig(CONFIG_PATH, mergedConfig);
+  logDeployStep('Configuration Saved', extractSanitizedConfigSummary(mergedConfig));
 
   const publicUrl = `https://storage.googleapis.com/${mergedConfig.gcs_bucket_name}/`;
   const manifestContent = updateLocalConfigs(gcfUrl, publicUrl);
@@ -106,8 +164,10 @@ async function runFullDeploymentPipeline() {
   await deployExtensionToGCS(mergedConfig);
   logDeployStep('Extension Uploaded to GCS', { gcs_bucket_name: mergedConfig.gcs_bucket_name });
 
-  await configureLookerAttribute(mergedConfig, gcfUrl);
-  logDeployStep('Looker User Attribute Configured', { gcfUrl });
+  for (const inst of mergedConfig.instances) {
+    await configureLookerAttribute(inst, gcfUrl);
+  }
+  logDeployStep('Looker User Attributes Configured', { count: mergedConfig.instances.length });
 
   const verificationResult = await runPostDeploymentVerification(mergedConfig, gcfUrl);
   logDeployStep('Post-Deployment Verification Completed', verificationResult);
@@ -145,31 +205,47 @@ function evaluateValidationResults(results) {
   }
 }
 
-async function resolveConnectionConfig(config, skipPrompts) {
-  return skipPrompts ? getSavedConnectionConfig(config) : await promptLookerConnection(config);
+async function resolveInstanceConnections(config) {
+  const instances = [];
+  let addMore = true;
+  const existingInstances = config.instances || [];
+
+  if (existingInstances.length > 0) {
+    for (const inst of existingInstances) {
+      instances.push(await promptLookerConnection(inst));
+    }
+  } else {
+    instances.push(await promptLookerConnection({}));
+  }
+
+  return instances;
 }
 
-async function resolveGCPConfig(config, skipPrompts) {
-  return skipPrompts ? getSavedGCPConfig(config) : await promptGCPConfig(config);
-}
+function assembleMergedConfig(targetConnections, saConfigs, gcpConfig) {
+  const instances = targetConnections.map((conn, idx) => ({
+    ...conn,
+    ...(saConfigs[idx] || {})
+  }));
 
-async function resolveServiceAccountConfig(connectionConfig, gcpConfig, config, skipPrompts) {
-  return skipPrompts
-    ? getSavedServiceAccountConfig(config, checkSecretsExistInGCP)
-    : await promptLookerServiceAccount(connectionConfig, gcpConfig, config, checkSecretsExistInGCP);
-}
-
-function assembleMergedConfig(connectionConfig, saConfig, gcpConfig) {
-  return { ...connectionConfig, ...saConfig, ...gcpConfig };
+  return {
+    ...gcpConfig,
+    instances,
+    // Top level fields for backwards compatibility
+    looker_host: instances[0]?.looker_host || '',
+    looker_port: instances[0]?.looker_port || '443',
+    looker_ssl: instances[0]?.looker_ssl !== undefined ? instances[0].looker_ssl : true,
+    looker_service_account: instances[0]?.looker_service_account || '',
+    looker_credential_method: instances[0]?.looker_credential_method || 'generate'
+  };
 }
 
 function extractSanitizedConfigSummary(mergedConfig) {
   return {
-    looker_host: mergedConfig.looker_host,
     gcp_project_id: mergedConfig.gcp_project_id,
     gcp_region: mergedConfig.gcp_region,
     gcf_name: mergedConfig.gcf_name,
-    gcs_bucket_name: mergedConfig.gcs_bucket_name
+    gcs_bucket_name: mergedConfig.gcs_bucket_name,
+    instanceCount: mergedConfig.instances.length
   };
 }
 

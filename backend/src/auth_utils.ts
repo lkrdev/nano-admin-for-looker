@@ -65,11 +65,15 @@ export async function getWorkflows(sdk: any): Promise<any> {
  * Ephemerally fetches index.md content from the dev workspace using an isolated SDK session.
  * This guarantees the main production SDK session is never mutated.
  */
-export async function fetchDevIndexContent(): Promise<{ text: string | null; error: string | null }> {
+export async function fetchDevIndexContent(sdk?: any): Promise<{ text: string | null; error: string | null }> {
   console.log('Fetching development index.md using an isolated SDK session...');
   let devSdk: any = null;
   try {
-    devSdk = LookerNodeSDK.init40();
+    if (sdk && sdk.authSession && sdk.authSession.settings) {
+      devSdk = LookerNodeSDK.init40(sdk.authSession.settings);
+    } else {
+      devSdk = LookerNodeSDK.init40();
+    }
     await devSdk.ok(devSdk.update_session({ workspace_id: 'dev' }));
 
     const baseUrl = devSdk.authSession.settings.base_url;

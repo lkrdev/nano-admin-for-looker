@@ -24,10 +24,10 @@ export function checkRateLimit(userId: string): boolean {
   return true;
 }
 
-export function generateChallengeToken(userId: string): string {
+export function generateChallengeToken(instanceHost: string, userId: string): string {
   const timestamp = Date.now();
   const random = crypto.randomBytes(8).toString('hex');
-  const payload = `${userId}|${timestamp}|${random}`;
+  const payload = `${instanceHost}|${userId}|${timestamp}|${random}`;
   const hmac = crypto.createHmac('sha256', HMAC_SECRET);
   hmac.update(payload);
   const signature = hmac.digest('hex');
@@ -39,29 +39,42 @@ export interface VerifyTokenResponse {
   tokenAgeMs?: number;
 }
 
-export function verifyChallengeToken(userId: string, token: string): VerifyTokenResponse {
+export function verifyChallengeToken(instanceHost: string, userId: string, token: string): VerifyTokenResponse {
   if (!token) {
-    console.log(`[DEBUG] verifyChallengeToken: Token is missing for user ${userId}`);
+    console.log(`[DEBUG] verifyChallengeToken: Token is missing for user ${userId} on ${instanceHost}`);
     return { status: 'missing' };
   }
 
-  console.log(`[DEBUG] verifyChallengeToken: Received token for user ${userId}. SHA256: ${hashForLog(token)}`);
+  console.log(`[DEBUG] verifyChallengeToken: Received token for user ${userId} on ${instanceHost}. SHA256: ${hashForLog(token)}`);
 
   try {
     const parts = token.split('|');
-    if (parts.length !== 4) {
+    let tokenHost = '';
+    let tokenUserId = '';
+    let tokenTimestampStr = '';
+    let random = '';
+    let signature = '';
+
+    if (parts.length === 5) {
+      [tokenHost, tokenUserId, tokenTimestampStr, random, signature] = parts;
+    } else if (parts.length === 4) {
+      // Legacy 4-part fallback format (userId|timestamp|random|signature)
+      [tokenUserId, tokenTimestampStr, random, signature] = parts;
+      tokenHost = instanceHost;
+    } else {
       console.log(`[DEBUG] verifyChallengeToken: Invalid token format (split parts: ${parts.length})`);
       return { status: 'invalid' };
     }
-    const [tokenUserId, tokenTimestampStr, random, signature] = parts;
 
-    if (tokenUserId !== userId) {
-      console.log(`[DEBUG] verifyChallengeToken: User ID mismatch. Expected: ${userId}, Token: ${tokenUserId}`);
+    if (tokenHost !== instanceHost || tokenUserId !== userId) {
+      console.log(`[DEBUG] verifyChallengeToken: Host or User ID mismatch. Host expected: ${instanceHost}, got: ${tokenHost}. User expected: ${userId}, got: ${tokenUserId}`);
       return { status: 'invalid' };
     }
 
     // Verify signature
-    const payload = `${tokenUserId}|${tokenTimestampStr}|${random}`;
+    const payload = parts.length === 5
+      ? `${tokenHost}|${tokenUserId}|${tokenTimestampStr}|${random}`
+      : `${tokenUserId}|${tokenTimestampStr}|${random}`;
     const hmac = crypto.createHmac('sha256', HMAC_SECRET);
     hmac.update(payload);
     const expectedSignature = hmac.digest('hex');
@@ -130,13 +143,13 @@ export async function getChallengeAttributeId(sdk: any): Promise<string | null> 
   return null;
 }
 
-export async function refreshChallenge(sdk: any, userId: string): Promise<string> {
-  const newChallenge = generateChallengeToken(userId);
-  console.log(`[DEBUG] refreshChallenge: Generated new challenge for user ${userId}. SHA256: ${hashForLog(newChallenge)}`);
+export async function refreshChallenge(sdk: any, instanceHost: string, userId: string): Promise<string> {
+  const newChallenge = generateChallengeToken(instanceHost, userId);
+  console.log(`[DEBUG] refreshChallenge: Generated new challenge for user ${userId} on ${instanceHost}. SHA256: ${hashForLog(newChallenge)}`);
   if (sdk) {
     const attrId = await getChallengeAttributeId(sdk);
     if (attrId) {
-      console.log(`[DEBUG] refreshChallenge: Setting nano_admin_challenge attribute (ID: ${attrId}) for user ${userId}.`);
+      console.log(`[DEBUG] refreshChallenge: Setting nano_admin_challenge attribute (ID: ${attrId}) for user ${userId} on ${instanceHost}.`);
       await sdk.ok(sdk.set_user_attribute_user_value(userId, attrId, { value: newChallenge }));
     } else {
       console.error('nano_admin_challenge user attribute ID not found on Looker instance.');

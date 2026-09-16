@@ -8,7 +8,7 @@ export const validateDevIndexHandler: ActionHandler = async (sdk, userId, payloa
   let fetchError: string | null = null;
 
   if (!text) {
-    const devFetch = await fetchDevIndexContent();
+    const devFetch = await fetchDevIndexContent(sdk);
     text = devFetch.text || '';
     fetchError = devFetch.error;
   }

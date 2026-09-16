@@ -152,7 +152,7 @@ async function getLookerCredentials(connectionConfig, saConfig) {
     }
   }
 
-  return { clientId, clientSecret };
+  return { clientId, clientSecret, serviceAccountId: targetSaId || saConfig.looker_service_account || '' };
 }
 
 function updateLocalConfigs(gcfUrl, publicUrl) {
@@ -235,7 +235,7 @@ async function configureLookerAttribute(config, gcfUrl) {
     domainOrigin = new URL(gcfUrl).origin;
   } catch (e) {}
 
-  const allowlistItems = ['http://localhost:8081', 'https://localhost:8081', gcfUrl];
+  const allowlistItems = [gcfUrl];
   if (domainOrigin && !allowlistItems.includes(domainOrigin)) {
     allowlistItems.push(domainOrigin);
   }
