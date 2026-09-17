@@ -59,6 +59,8 @@ workflows:
       - "1" # Admins group
     parameters:
       target_object: "users"
+      user_id_limitation:
+        mode: "none"
       supported_operations:
         - name: "list"
           fields: ["id", "display_name", "email", "is_disabled"]
@@ -83,6 +85,8 @@ workflows:
       - "1"
     parameters:
       target_object: "connections"
+      user_id_limitation:
+        mode: "none"
       supported_operations:
         - name: "list"
           fields: ["name", "dialect_name", "host", "port", "database"]
