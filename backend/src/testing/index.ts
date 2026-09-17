@@ -1,3 +1,7 @@
+if (!process.env.GCF_HMAC_SECRET) {
+  process.env.GCF_HMAC_SECRET = 'test_secret_for_nano_admin_challenges';
+}
+
 import { resolveUserIdLimitation, getScopeGroupUserIds, parseYaml, UserIdLimitation } from '../auth_utils';
 import { wrapLookerSDKWithLogging } from '../looker_logging_sdk';
 

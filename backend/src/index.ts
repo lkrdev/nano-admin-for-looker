@@ -19,16 +19,16 @@ import { ApiSettings } from '@looker/sdk-rtl';
 class CustomNodeSettings extends ApiSettings {
   private configValues: Record<string, string>;
 
-  constructor(customConfig: { base_url: string; client_id: string; client_secret: string; verify_ssl?: boolean }) {
+  constructor(customConfig: { base_url: string; client_id: string; client_secret: string }) {
     super({
       base_url: customConfig.base_url,
-      verify_ssl: customConfig.verify_ssl !== false
+      verify_ssl: true
     } as any);
     this.configValues = {
       base_url: customConfig.base_url,
       client_id: customConfig.client_id,
       client_secret: customConfig.client_secret,
-      verify_ssl: String(customConfig.verify_ssl !== false)
+      verify_ssl: 'true'
     };
   }
 
@@ -68,8 +68,7 @@ function getSDKForInstance(trustedHost?: string): any {
     const customSettings = new CustomNodeSettings({
       base_url: baseUrl,
       client_id: perInstClientId,
-      client_secret: perInstClientSecret,
-      verify_ssl: true
+      client_secret: perInstClientSecret
     });
     const sdkInstance = LookerNodeSDK.init40(customSettings as any);
     sdkCache.set(cleanHost, sdkInstance);
@@ -130,7 +129,9 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
         return;
       }
 
-      const rateLimitKey = `${trustedInstanceHost}_${userId}` || req.ip || String(req.headers['x-forwarded-for']) || 'global';
+      const rateLimitKey = (trustedInstanceHost && userId)
+        ? `${trustedInstanceHost}_${userId}`
+        : (req.ip || 'global');
       const allowed = checkRateLimit(rateLimitKey);
       if (!allowed) {
         console.warn(`Rate limit exceeded for client: ${rateLimitKey}`);

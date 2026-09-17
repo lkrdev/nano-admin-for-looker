@@ -1,6 +1,9 @@
 import * as crypto from 'crypto';
 
-const HMAC_SECRET = process.env.GCF_HMAC_SECRET || 'default_secret_for_nano_admin_challenges';
+if (!process.env.GCF_HMAC_SECRET) {
+  throw new Error('GCF_HMAC_SECRET environment variable is required');
+}
+const HMAC_SECRET: string = process.env.GCF_HMAC_SECRET;
 
 export type ChallengeVerificationResult = 'valid' | 'expired' | 'invalid' | 'missing';
 
@@ -71,6 +74,11 @@ export function verifyChallengeToken(instanceHost: string, userId: string, token
       return { status: 'invalid' };
     }
 
+    // Check untrusted signature is exactly 64 valid hex chars (32 bytes SHA-256 digest)
+    if (!/^[0-9a-fA-F]{64}$/.test(signature)) {
+      return { status: 'invalid' };
+    }
+
     // Verify signature
     const payload = parts.length === 5
       ? `${tokenHost}|${tokenUserId}|${tokenTimestampStr}|${random}`
@@ -79,10 +87,10 @@ export function verifyChallengeToken(instanceHost: string, userId: string, token
     hmac.update(payload);
     const expectedSignature = hmac.digest('hex');
 
-    const signatureValid = crypto.timingSafeEqual(
-      Buffer.from(signature, 'hex'),
-      Buffer.from(expectedSignature, 'hex')
-    );
+    const sigBuf = Buffer.from(signature, 'hex');
+    const expectedBuf = Buffer.from(expectedSignature, 'hex');
+
+    const signatureValid = crypto.timingSafeEqual(sigBuf, expectedBuf);
 
     if (!signatureValid) return { status: 'invalid' };
 
