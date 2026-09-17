@@ -179,7 +179,7 @@ function getLookerCliProfiles() {
         const name = match[1];
         const host = match[2];
         const port = match[3] || '443';
-        const ssl = port !== '80';
+        const ssl = true;
         profiles.push({ name, host, port, ssl, isDefault });
       }
       if (profiles.length >= 10) break;
@@ -216,10 +216,7 @@ async function promptLookerConnection(existingInstance = {}) {
     } else if (choiceStr && !choiceStr.match(/^\d+$/)) {
       const host = choiceStr.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
       const portInput = await askQuestion(`Enter Looker API Port [${existingInstance.looker_port || '443'}]: `);
-      const port = portInput || existingInstance.looker_port || '443';
-      const sslInput = await askQuestion(`Use SSL (HTTPS)? (Y/n) [Y]: `);
-      const ssl = sslInput.toLowerCase() !== 'n';
-      return { looker_host: host, looker_port: port, looker_ssl: ssl };
+      return { looker_host: host, looker_port: port, looker_ssl: true };
     }
   }
 
@@ -232,15 +229,11 @@ async function promptLookerConnection(existingInstance = {}) {
   
   const portInput = await askQuestion(`Enter Looker API Port [${existingInstance.looker_port || '443'}]: `);
   const port = portInput || existingInstance.looker_port || '443';
-  
-  const defaultSsl = existingInstance.looker_ssl !== undefined ? (existingInstance.looker_ssl ? 'Y' : 'n') : 'Y';
-  const sslInput = await askQuestion(`Use SSL (HTTPS)? (Y/n) [${defaultSsl}]: `);
-  const ssl = sslInput === '' ? (defaultSsl === 'Y') : (sslInput.toLowerCase() !== 'n');
 
   return {
     looker_host: host,
     looker_port: port,
-    looker_ssl: ssl
+    looker_ssl: true
   };
 }
 

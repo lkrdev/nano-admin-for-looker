@@ -206,7 +206,7 @@ function fetchRawText(urlStr: string, headers: any): Promise<string> {
     const options = {
       method: 'GET',
       headers: headers,
-      rejectUnauthorized: false
+      rejectUnauthorized: true
     };
 
     const req = https.request(url, options, (res) => {

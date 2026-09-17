@@ -135,7 +135,7 @@ async function runFullDeploymentPipeline() {
     multiInstanceCreds[inst.looker_host] = {
       base_url: `https://${inst.looker_host}:${inst.looker_port}`,
       port: inst.looker_port,
-      verify_ssl: inst.looker_ssl,
+      verify_ssl: true,
       client_id: creds?.clientId || '',
       client_secret: creds?.clientSecret || ''
     };
