@@ -130,7 +130,9 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
         return;
       }
 
-      const rateLimitKey = `${trustedInstanceHost}_${userId}` || req.ip || String(req.headers['x-forwarded-for']) || 'global';
+      const rateLimitKey = (trustedInstanceHost && userId)
+        ? `${trustedInstanceHost}_${userId}`
+        : (req.ip || 'global');
       const allowed = checkRateLimit(rateLimitKey);
       if (!allowed) {
         console.warn(`Rate limit exceeded for client: ${rateLimitKey}`);
