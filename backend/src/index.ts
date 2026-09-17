@@ -165,9 +165,14 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
     }
 
     // Status is 'valid'
+    if (!req.body || typeof req.body !== 'object' || Array.isArray(req.body)) {
+      res.status(400).json({ error: 'Invalid request body payload format' });
+      return;
+    }
+
     const { action } = req.body;
-    if (!action) {
-      res.status(400).json({ error: 'Missing required field: "action"' });
+    if (!action || typeof action !== 'string') {
+      res.status(400).json({ error: 'Missing or invalid required field: "action"' });
       return;
     }
 

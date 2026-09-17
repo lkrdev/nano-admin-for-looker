@@ -1,5 +1,5 @@
 import { getWorkflows, isUserAuthorized, getScopeGroupUserIds, resolveUserIdLimitation, UserIdLimitationResult, UserIdLimitation } from '../auth_utils';
-import { ActionHandler } from './registry';
+import { ActionHandler, HttpError } from './registry';
 import { BUILD_HASH, BUILD_TIMESTAMP } from '../build_hash';
 import { wrapLookerSDKWithLogging } from '../looker_logging_sdk';
 
@@ -7,10 +7,10 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
   const { workflowId, workflowAction, payload } = reqBody;
 
   if (!workflowId) {
-    throw { status: 400, message: 'Missing required parameter: "workflowId"' };
+    throw new HttpError(400, 'Missing required parameter: "workflowId"');
   }
   if (!workflowAction) {
-    throw { status: 400, message: 'Missing required parameter: "workflowAction"' };
+    throw new HttpError(400, 'Missing required parameter: "workflowAction"');
   }
 
   // 1. Fetch workflow configurations
@@ -18,18 +18,18 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
   const workflow = (configData.workflows || []).find((w: any) => w.id === workflowId);
 
   if (!workflow) {
-    throw { status: 404, message: `Workflow with ID "${workflowId}" not found.` };
+    throw new HttpError(404, `Workflow with ID "${workflowId}" not found.`);
   }
 
   // 2. Validate Authorization
   const authorized = await isUserAuthorized(sdk, userId, workflowId);
   if (!authorized) {
-    throw { status: 403, message: `User ${userId} is not authorized to execute workflow "${workflowId}"` };
+    throw new HttpError(403, `User ${userId} is not authorized to execute workflow "${workflowId}"`);
   }
 
   const templateId = workflow.template;
-  if (!templateId) {
-    throw { status: 400, message: `Workflow "${workflowId}" does not specify a template.` };
+  if (!templateId || typeof templateId !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(templateId)) {
+    throw new HttpError(400, `Workflow "${workflowId}" specifies an invalid template identifier.`);
   }
 
   console.log(`[Lazy Loading] Loading backend handler for template "${templateId}"...`);
@@ -41,18 +41,18 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
     templateModule = require(`../workflow-templates/${templateId}/backend`);
   } catch (err: any) {
     console.error(`Failed to lazy load template "${templateId}" backend:`, err);
-    throw {
-      status: 500,
-      message: `Failed to load backend handler for template "${templateId}". Ensure the template exists and is compiled.`
-    };
+    throw new HttpError(
+      500,
+      `Failed to load backend handler for template "${templateId}". Ensure the template exists and is compiled.`
+    );
   }
 
   const handler = templateModule.handler;
   if (typeof handler !== 'function') {
-    throw {
-      status: 500,
-      message: `Template "${templateId}" backend module does not export a "handler" function.`
-    };
+    throw new HttpError(
+      500,
+      `Template "${templateId}" backend module does not export a "handler" function.`
+    );
   }
 
   // Wrap SDK with workflow logging context
@@ -87,9 +87,13 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
     };
   } catch (error: any) {
     console.error(`Error in workflow template "${templateId}" handler:`, error);
-    throw {
-      status: error.status || 500,
-      message: error.message || String(error)
-    };
+    if (error instanceof HttpError || typeof error?.status === 'number') {
+      throw error;
+    }
+    const isForbidden = error?.message && String(error.message).startsWith('403');
+    throw new HttpError(
+      error?.status || (isForbidden ? 403 : 500),
+      error?.message || String(error)
+    );
   }
 };
