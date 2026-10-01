@@ -1,9 +1,10 @@
-import { getWorkflows } from '../../../auth_utils';
+import { getWorkflows, resolveAuthorizedGroups } from '../../../auth_utils';
 
 export interface WorkflowContext {
   sdk: any;
   userId: string;
   workflowId: string;
+  instanceHost?: string;
   parameters: {
     default_attribute_name?: string;
   };
@@ -18,7 +19,7 @@ export const handler = async (
   const defaultAttr = context.parameters?.default_attribute_name || 'nano_admin_is_workflow_scope_group';
 
   if (action === 'get_groups_audit') {
-    return await executeGroupsAudit(sdk, defaultAttr);
+    return await executeGroupsAudit(sdk, defaultAttr, context.instanceHost);
   }
 
   if (action === 'create_user_attribute') {
@@ -59,11 +60,11 @@ export const handler = async (
 
 // --- Helper Functions ---
 
-async function executeGroupsAudit(sdk: any, defaultAttributeName: string) {
+async function executeGroupsAudit(sdk: any, defaultAttributeName: string, instanceHost?: string) {
   // 1. Fetch workflows from index.md
   let workflowsConfig: any = { workflows: [] };
   try {
-    workflowsConfig = await getWorkflows(sdk);
+    workflowsConfig = await getWorkflows(sdk, instanceHost);
   } catch (err) {
     // Fallback if index.md fetch fails
   }
@@ -89,9 +90,10 @@ async function executeGroupsAudit(sdk: any, defaultAttributeName: string) {
       }
     }
 
-    if (Array.isArray(wf.authorized_groups) && wf.authorized_groups.length > 0) {
+    const resolvedAuthGroups = resolveAuthorizedGroups(wf.authorized_groups, instanceHost);
+    if (resolvedAuthGroups.length > 0) {
       workflowsWithAuthGroups.push(wf);
-      wf.authorized_groups.forEach((gid: any) => allReferencedAuthGroupIdsSet.add(String(gid)));
+      resolvedAuthGroups.forEach((gid: string) => allReferencedAuthGroupIdsSet.add(gid));
     }
   }
 
@@ -284,7 +286,20 @@ async function executeGroupsAudit(sdk: any, defaultAttributeName: string) {
   const workflowAccessMatrix: any[] = [];
 
   for (const wf of workflows) {
-    const authGroupIds: string[] = (wf.authorized_groups || []).map((g: any) => String(g));
+    // Audit check: disallow protocol in dictionary host keys
+    if (typeof wf.authorized_groups === 'object' && wf.authorized_groups !== null && !Array.isArray(wf.authorized_groups)) {
+      for (const k of Object.keys(wf.authorized_groups)) {
+        if (/^https?:\/\//i.test(k)) {
+          uniqueInvalidAuthGroupsMap.set(`invalid_host_${wf.id}_${k}`, {
+            workflow_id: wf.id,
+            workflow_label: wf.label || wf.id,
+            group_id: `Host "${k}" has protocol (https://) which is disallowed. Use plain hostname.`
+          });
+        }
+      }
+    }
+
+    const authGroupIds: string[] = resolveAuthorizedGroups(wf.authorized_groups, instanceHost);
     const resolvedGroups: any[] = [];
 
     for (const gid of authGroupIds) {

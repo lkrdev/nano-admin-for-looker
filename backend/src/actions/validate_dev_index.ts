@@ -52,7 +52,7 @@ export const validateDevIndexHandler: ActionHandler = async (sdk, userId, payloa
 
 // --- Hoisted Pure Helpers ---
 
-function validateWorkflowsSchema(parsedData: any): { valid: boolean; error?: string; workflows: any[] } {
+export function validateWorkflowsSchema(parsedData: any): { valid: boolean; error?: string; workflows: any[] } {
   if (!parsedData || typeof parsedData !== 'object') {
     return { valid: false, error: 'Root content must be a YAML object.', workflows: [] };
   }
@@ -84,16 +84,68 @@ function validateWorkflowsSchema(parsedData: any): { valid: boolean; error?: str
     if (!templateExists) {
       return { valid: false, error: `${itemPrefix} ("${wf.id}") references non-existent template "${wf.template}".`, workflows: [] };
     }
+
+    if (wf.authorized_groups !== undefined && wf.authorized_groups !== null) {
+      if (Array.isArray(wf.authorized_groups)) {
+        for (const item of wf.authorized_groups) {
+          if (typeof item !== 'string' && typeof item !== 'number') {
+            return {
+              valid: false,
+              error: `${itemPrefix} ("${wf.id}") has invalid entry in authorized_groups: expected string or number group ID.`,
+              workflows: []
+            };
+          }
+        }
+      } else if (typeof wf.authorized_groups === 'object') {
+        for (const [hostKey, groups] of Object.entries(wf.authorized_groups)) {
+          if (/^https?:\/\//i.test(hostKey)) {
+            return {
+              valid: false,
+              error: `${itemPrefix} ("${wf.id}") invalid host key "${hostKey}" in authorized_groups: protocol (https://) is not allowed. Use plain hostname or hostname:port.`,
+              workflows: []
+            };
+          }
+          if (!Array.isArray(groups)) {
+            return {
+              valid: false,
+              error: `${itemPrefix} ("${wf.id}") host "${hostKey}" in authorized_groups must be an array of group IDs.`,
+              workflows: []
+            };
+          }
+          for (const item of groups) {
+            if (typeof item !== 'string' && typeof item !== 'number') {
+              return {
+                valid: false,
+                error: `${itemPrefix} ("${wf.id}") host "${hostKey}" has invalid entry in authorized_groups: expected string or number group ID.`,
+                workflows: []
+              };
+            }
+          }
+        }
+      } else {
+        return {
+          valid: false,
+          error: `${itemPrefix} ("${wf.id}") "authorized_groups" must be either an array of group IDs or a dictionary mapping hostnames to arrays of group IDs.`,
+          workflows: []
+        };
+      }
+    }
   }
 
   const sanitizedWorkflows = workflows.map((wf: any) => {
     const manifest = getTemplateManifest(wf.template);
+    let authCount = 0;
+    if (Array.isArray(wf.authorized_groups)) {
+      authCount = wf.authorized_groups.length;
+    } else if (typeof wf.authorized_groups === 'object' && wf.authorized_groups !== null) {
+      authCount = Object.values(wf.authorized_groups).reduce((acc: number, cur: any) => acc + (Array.isArray(cur) ? cur.length : 0), 0);
+    }
     return {
       id: wf.id,
       label: wf.label,
       template: wf.template,
       mount_type: manifest.mount_type || wf.mount_type || 'page',
-      authorized_groups_count: Array.isArray(wf.authorized_groups) ? wf.authorized_groups.length : 0
+      authorized_groups_count: authCount
     };
   });
 

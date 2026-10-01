@@ -1,16 +1,19 @@
 import fs from 'fs';
 import path from 'path';
-import { getWorkflows, getUserGroups } from '../auth_utils';
+import { getWorkflows, getUserGroups, resolveAuthorizedGroups } from '../auth_utils';
 import { BUILD_HASH, BUILD_TIMESTAMP } from '../build_hash';
+import { ActionContext } from './registry';
 
-export async function getWorkflowsHandler(sdk: any, userId: string, payload: any): Promise<any> {
-  const configData = await getWorkflows(sdk);
+export async function getWorkflowsHandler(sdk: any, userId: string, payload: any, context?: ActionContext): Promise<any> {
+  const instanceHost = context?.instanceHost;
+  const configData = await getWorkflows(sdk, instanceHost);
   const userGroups = await getUserGroups(sdk, userId);
 
   const authorizedWorkflows = (configData.workflows || []).map((wf: any) => {
-    let authorized = true;
-    if (wf.authorized_groups && wf.authorized_groups.length > 0) {
-      authorized = wf.authorized_groups.some((groupId: string) => userGroups.includes(groupId));
+    const allowedGroupIds = resolveAuthorizedGroups(wf.authorized_groups, instanceHost);
+    let authorized = false;
+    if (allowedGroupIds.length > 0) {
+      authorized = allowedGroupIds.some((groupId: string) => userGroups.includes(groupId));
     }
     const manifest = getTemplateManifest(wf.template);
     const mountType = manifest.mount_type || wf.mount_type || 'page';

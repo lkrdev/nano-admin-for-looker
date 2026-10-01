@@ -251,8 +251,10 @@ async function deployGCF(config, lookerCreds) {
 
   const primaryHost = (config.instances && config.instances.length > 0) ? config.instances[0].looker_host : config.looker_host;
   const primaryPort = (config.instances && config.instances.length > 0) ? config.instances[0].looker_port : config.looker_port;
+  const allowedInstances = resolveAllowedInstances(config.instances, config.looker_host, config.looker_port);
 
   console.log(`\n🚀 Deploying Cloud Function: ${config.gcf_name} to region ${config.gcp_region}...`);
+  console.log(`Configuring instance allowlist: [${allowedInstances}]`);
   const deployCommand = `gcloud functions deploy ${config.gcf_name} \\
     --gen2 \\
     --runtime=nodejs24 \\
@@ -261,7 +263,7 @@ async function deployGCF(config, lookerCreds) {
     --allow-unauthenticated \\
     --entry-point=nanoAdminBackend \\
     --source=backend \\
-    --set-env-vars="LOOKERSDK_BASE_URL=https://${primaryHost}:${primaryPort},BUILD_HASH=${localBuildHash}" \\
+    --set-env-vars="LOOKERSDK_BASE_URL=https://${primaryHost}:${primaryPort},BUILD_HASH=${localBuildHash},LOOKER_ALLOWED_INSTANCES=${allowedInstances}" \\
     --set-secrets="${secretBindings.join(',')}"`;
 
   console.log(`Running deploy command:\n${deployCommand}\n`);
@@ -368,6 +370,25 @@ async function deployExtensionToGCS(config) {
   return publicUrl;
 }
 
+function resolveAllowedInstances(instances, fallbackHost, fallbackPort) {
+  const hostList = Array.isArray(instances) && instances.length > 0
+    ? instances
+    : [{ looker_host: fallbackHost, looker_port: fallbackPort }];
+
+  const allowedSet = new Set();
+  for (const item of hostList) {
+    if (item && item.looker_host) {
+      const cleanHost = item.looker_host.trim().toLowerCase();
+      allowedSet.add(cleanHost);
+      const port = String(item.looker_port || '443').trim();
+      if (port && port !== '443' && port !== '80') {
+        allowedSet.add(`${cleanHost}:${port}`);
+      }
+    }
+  }
+  return Array.from(allowedSet).join(',');
+}
+
 module.exports = {
   sanitizeHostForSecret,
   loadLocalBuildHash,
@@ -375,5 +396,6 @@ module.exports = {
   checkSecretsExistInGCP,
   scanExistingResources,
   deployGCF,
-  deployExtensionToGCS
+  deployExtensionToGCS,
+  resolveAllowedInstances
 };

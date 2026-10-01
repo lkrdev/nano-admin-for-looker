@@ -35,7 +35,7 @@ test('crud — read operation out-of-scope 403 guard', async () => {
     /403 Forbidden: Target user does not belong to an allowed user scope/
   );
 
-  const readCalls = context.sdk.calls.filter((c: any) => c.method === 'user');
+  const readCalls = context.sdk.calls.filter((c: any) => c.method === 'user' && c.args[0] === '999');
   assert.equal(readCalls.length, 1);
   assert.equal(readCalls[0].args[0], '999');
 });

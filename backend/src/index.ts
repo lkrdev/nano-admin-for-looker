@@ -119,6 +119,14 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
     const targetSdk = getSDKForInstance(trustedInstanceHost);
 
     if (status !== 'valid') {
+      if (status === 'forbidden') {
+        res.status(403).json({
+          error: 'forbidden',
+          message: `Looker instance host "${trustedInstanceHost}" is not permitted by this service.`
+        });
+        return;
+      }
+
       console.warn(`[DEBUG] Authentication failed for user "${userId}" on "${trustedInstanceHost}" (Status: ${status}). Resetting/refreshing challenge...`);
 
       if (!userId) {
@@ -182,7 +190,8 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
     const requestSdk = wrapLookerSDKWithLogging(targetSdk, { userId, action });
 
     try {
-      const result = await handler(requestSdk, userId, req.body);
+      const actionContext = { instanceHost: trustedInstanceHost };
+      const result = await handler(requestSdk, userId, req.body, actionContext);
       res.status(200).json(result);
     } catch (error: any) {
       console.error(`Error executing action "${action}":`, error);
