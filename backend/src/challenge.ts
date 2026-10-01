@@ -1,7 +1,11 @@
 import * as crypto from 'crypto';
 
 if (!process.env.GCF_HMAC_SECRET) {
-  throw new Error('GCF_HMAC_SECRET environment variable is required');
+  if (process.env.NODE_ENV === 'test' || process.env.npm_lifecycle_event === 'test') {
+    process.env.GCF_HMAC_SECRET = 'test_secret_for_tests_12345678901234567890';
+  } else {
+    throw new Error('GCF_HMAC_SECRET environment variable is required');
+  }
 }
 const HMAC_SECRET: string = process.env.GCF_HMAC_SECRET;
 

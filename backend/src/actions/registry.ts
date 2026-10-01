@@ -1,4 +1,13 @@
-export type ActionHandler = (sdk: any, userId: string, payload: any) => Promise<any>;
+export interface ActionContext {
+  instanceHost: string;
+}
+
+export type ActionHandler = (
+  sdk: any,
+  userId: string,
+  payload: any,
+  context?: ActionContext
+) => Promise<any>;
 
 import { getWorkflowsHandler } from './get_workflows';
 import { executeWorkflowHandler } from './execute_workflow';

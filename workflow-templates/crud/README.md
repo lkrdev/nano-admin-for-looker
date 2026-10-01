@@ -34,7 +34,10 @@ Specify these top-level workflow parameters under your workflow in the `index.md
 - **`label`**: *(Required, string)* Human-readable title displayed on the workflow card and navigation header.
 - **`description`**: *(Optional, string)* Custom description text that overrides the default card description. If omitted, a default description is auto-generated based on the target object (e.g., `"Manage <target_object> records and settings."`).
 - **`template`**: *(Required, string)* Must be `"crud"`.
-- **`authorized_groups`**: *(Optional, array of strings)* Looker group IDs authorized to view/run this workflow.
+- **`authorized_groups`**: *(Required, array or dictionary)* Looker group IDs authorized to view and run this workflow. Supports two formats:
+  - **Single-instance (Array)**: An array of string group IDs (e.g., `["1", "2"]`).
+  - **Multi-instance (Dictionary)**: A map of instance hostnames (no protocol) to arrays of string group IDs (e.g., `{"dev.looker.app": ["1"], "prod.looker.app": ["3"]}`).
+  - *Default-Deny*: Workflows without `authorized_groups` or matching groups for the active instance default to denying access to all users.
 - **`parameters`**: *(Required, object)* Container for template-specific parameters:
   - **`target_object`**: *(Required, string)* The Looker resource type. Must be one of the 12 types listed in the table above.
   - **`supported_operations`**: *(Required, array)* A list of allowed actions. Must be a subset of the allowed operations for that resource type. Supported names: `list`, `read`, `create`, `update`, `delete`. Each item in the array supports:
@@ -90,6 +93,27 @@ workflows:
       supported_operations:
         - name: "list"
           fields: ["name", "dialect_name", "host", "port", "database"]
+        - name: "read"
+```
+
+### Example 3: Multi-Instance Deployment with Host-Specific Groups
+When deploying the same `index.md` across multiple Looker environments, `authorized_groups` can map each environment hostname to its specific Looker group IDs:
+
+```yaml
+workflows:
+  - id: "connection_auditor"
+    label: "Database Connection Auditor"
+    template: "crud"
+    authorized_groups:
+      dev.looker.app:
+        - "10"
+        - "12"
+      prod.looker.app:
+        - "5"
+    parameters:
+      target_object: "connections"
+      supported_operations:
+        - name: "list"
         - name: "read"
 ```
 

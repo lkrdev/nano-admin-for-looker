@@ -6,8 +6,22 @@ export interface AuthenticationResult {
   trustedInstanceHost: string;
   trustedUserId: string;
   userId: string; // Alias for backward compatibility
-  status: ChallengeVerificationResult;
+  status: ChallengeVerificationResult | 'forbidden';
   tokenAgeMs?: number;
+}
+
+export function isHostAllowed(host: string, allowedInstancesEnv?: string): boolean {
+  if (!allowedInstancesEnv || !allowedInstancesEnv.trim()) {
+    return true; // No allowlist configured, permissive mode
+  }
+  const allowedList = allowedInstancesEnv
+    .split(',')
+    .map((h) => h.trim().toLowerCase())
+    .filter(Boolean);
+  if (allowedList.length === 0) {
+    return true;
+  }
+  return allowedList.includes((host || '').trim().toLowerCase());
 }
 
 function sanitizeHost(rawHost: string): string {
@@ -30,14 +44,21 @@ export function authenticateRequest(req: ff.Request): AuthenticationResult {
 
   console.log(`[DEBUG] authenticateRequest: Incoming headers - Authorization present: ${!!authHeader}, X-Looker-User-ID: "${lookerUserIdHeader}", X-Looker-Instance-Host present: ${!!rawInstanceHostHeader}`);
 
+  const rawHost = String(rawInstanceHostHeader || '').trim();
+  const sanitizedHost = sanitizeHost(rawHost);
+
+  // Validate host against LOOKER_ALLOWED_INSTANCES allowlist
+  if (!isHostAllowed(sanitizedHost, process.env.LOOKER_ALLOWED_INSTANCES)) {
+    console.warn(`[DEBUG] authenticateRequest: Request rejected. Host "${sanitizedHost}" is not in LOOKER_ALLOWED_INSTANCES.`);
+    return { trustedInstanceHost: sanitizedHost, trustedUserId: '', userId: '', status: 'forbidden' };
+  }
+
   if (!authHeader || !lookerUserIdHeader) {
     console.log('[DEBUG] authenticateRequest: Missing Authorization or X-Looker-User-ID header');
-    return { trustedInstanceHost: '', trustedUserId: '', userId: '', status: 'missing' };
+    return { trustedInstanceHost: sanitizedHost, trustedUserId: '', userId: '', status: 'missing' };
   }
 
   const userId = String(lookerUserIdHeader).trim();
-  const rawHost = String(rawInstanceHostHeader || '').trim();
-  const sanitizedHost = sanitizeHost(rawHost);
 
   if (!authHeader.startsWith('looker-attribute-challenge ')) {
     console.log('[DEBUG] authenticateRequest: Authorization header is not formatted with looker-attribute-challenge prefix');

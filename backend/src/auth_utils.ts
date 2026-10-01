@@ -4,8 +4,16 @@ import { URL } from 'url';
 
 import { LookerNodeSDK } from '@looker/sdk-node';
 
-let cachedWorkflows: any = null;
-let cacheExpiration = 0;
+const cachedWorkflowsByHost = new Map<string, { data: any; expiration: number }>();
+
+export function clearWorkflowCache(): void {
+  cachedWorkflowsByHost.clear();
+}
+
+export function setCachedWorkflows(instanceHost: string, data: any, durationMs: number = 60000): void {
+  const cacheKey = instanceHost ? instanceHost.trim().toLowerCase() : '__default__';
+  cachedWorkflowsByHost.set(cacheKey, { data, expiration: Date.now() + durationMs });
+}
 
 export interface YamlParseResult {
   data: any;
@@ -27,12 +35,66 @@ export function parseYaml(yamlStr: string): any {
   return parseYamlWithStatus(yamlStr).data;
 }
 
-export async function getWorkflows(sdk: any): Promise<any> {
+/**
+ * Resolves the effective authorized Looker group IDs for a given workflow and instance host.
+ *
+ * Rules:
+ * - Missing, null, or empty configurations return [] (Default-Deny).
+ * - Array format: Returns all group IDs as strings (unqualified, single-instance).
+ * - Dictionary format: Matches against instanceHost (literal string match, case-insensitive).
+ *   - If instanceHost matches a key, returns that key's group IDs as strings.
+ *   - If instanceHost is missing, empty, or not found in the dictionary, returns [] (Default-Deny).
+ */
+export function resolveAuthorizedGroups(
+  authorizedGroupsConfig: any,
+  instanceHost?: string
+): string[] {
+  if (!authorizedGroupsConfig) {
+    return [];
+  }
+
+  // 1. Array format: Unqualified IDs for single-instance
+  if (Array.isArray(authorizedGroupsConfig)) {
+    return authorizedGroupsConfig.map((gid) => String(gid).trim()).filter(Boolean);
+  }
+
+  // 2. Dictionary format: host-keyed map
+  if (typeof authorizedGroupsConfig === 'object') {
+    if (!instanceHost) {
+      return [];
+    }
+    const cleanHost = instanceHost.trim().toLowerCase();
+
+    // Direct lookup or case-insensitive key lookup
+    let hostGroups = authorizedGroupsConfig[instanceHost];
+    if (!hostGroups) {
+      const matchingKey = Object.keys(authorizedGroupsConfig).find(
+        (k) => k.trim().toLowerCase() === cleanHost
+      );
+      if (matchingKey) {
+        hostGroups = authorizedGroupsConfig[matchingKey];
+      }
+    }
+
+    if (Array.isArray(hostGroups)) {
+      return hostGroups.map((gid) => String(gid).trim()).filter(Boolean);
+    }
+    return [];
+  }
+
+  return [];
+}
+
+export async function getWorkflows(sdk: any, instanceHost?: string): Promise<any> {
   const cacheDurationMs = parseInt(process.env.ADMIN_PAGES_CACHE_DURATION_MS || '0', 10);
   const now = Date.now();
+  const cacheKey = instanceHost
+    ? instanceHost.trim().toLowerCase()
+    : (sdk?.authSession?.settings?.base_url || '__default__');
 
-  if (cachedWorkflows && now < cacheExpiration) {
-    return cachedWorkflows;
+  const cached = cachedWorkflowsByHost.get(cacheKey);
+  if (cached && now < cached.expiration) {
+    return cached.data;
   }
 
   console.log('Fetching index.md from project nano_admin...');
@@ -49,14 +111,12 @@ export async function getWorkflows(sdk: any): Promise<any> {
       indexFileLoaded: true,
       parseError: parseError || null
     };
-    cachedWorkflows = result;
-    cacheExpiration = now + cacheDurationMs;
+    cachedWorkflowsByHost.set(cacheKey, { data: result, expiration: now + cacheDurationMs });
     return result;
   } catch (err: any) {
     console.warn('Failed to load index.md from project nano_admin:', err.message || err);
     const fallback = { workflows: [], indexFileLoaded: false, parseError: null };
-    cachedWorkflows = fallback;
-    cacheExpiration = now + cacheDurationMs;
+    cachedWorkflowsByHost.set(cacheKey, { data: fallback, expiration: now + cacheDurationMs });
     return fallback;
   }
 }
@@ -102,16 +162,24 @@ export async function getUserGroups(sdk: any, userId: string): Promise<string[]>
   return (userDetails?.group_ids || []).map((g: any) => String(g));
 }
 
-export async function isUserAuthorized(sdk: any, userId: string, identifier: string): Promise<boolean> {
-  const configData = await getWorkflows(sdk);
+export async function isUserAuthorized(
+  sdk: any,
+  userId: string,
+  identifier: string,
+  instanceHost?: string
+): Promise<boolean> {
+  const configData = await getWorkflows(sdk, instanceHost);
   const cleanId = identifier.replace(/^\//, '');
   const workflow = (configData.workflows || []).find((w: any) => w.id === identifier || w.id === cleanId);
 
   if (!workflow) return false;
-  if (!workflow.authorized_groups || workflow.authorized_groups.length === 0) return true;
+
+  const allowedGroupIds = resolveAuthorizedGroups(workflow.authorized_groups, instanceHost);
+  // DEFAULT-DENY: Workflows without valid group authorization are denied to everyone
+  if (allowedGroupIds.length === 0) return false;
 
   const userGroups = await getUserGroups(sdk, userId);
-  return workflow.authorized_groups.some((groupId: string) => userGroups.includes(groupId));
+  return allowedGroupIds.some((groupId: string) => userGroups.includes(groupId));
 }
 
 /**

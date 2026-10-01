@@ -3,8 +3,9 @@ import { ActionHandler } from './registry';
 import { BUILD_HASH, BUILD_TIMESTAMP } from '../build_hash';
 import { wrapLookerSDKWithLogging } from '../looker_logging_sdk';
 
-export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody) => {
+export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody, actionContext) => {
   const { workflowId, workflowAction, payload } = reqBody;
+  const instanceHost = actionContext?.instanceHost;
 
   if (!workflowId) {
     throw { status: 400, message: 'Missing required parameter: "workflowId"' };
@@ -14,7 +15,7 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
   }
 
   // 1. Fetch workflow configurations
-  const configData = await getWorkflows(sdk);
+  const configData = await getWorkflows(sdk, instanceHost);
   const workflow = (configData.workflows || []).find((w: any) => w.id === workflowId);
 
   if (!workflow) {
@@ -22,7 +23,7 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
   }
 
   // 2. Validate Authorization
-  const authorized = await isUserAuthorized(sdk, userId, workflowId);
+  const authorized = await isUserAuthorized(sdk, userId, workflowId, instanceHost);
   if (!authorized) {
     throw { status: 403, message: `User ${userId} is not authorized to execute workflow "${workflowId}"` };
   }
@@ -67,6 +68,7 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
     sdk: workflowSdk,
     userId,
     workflowId: workflow.id,
+    instanceHost,
     parameters: workflow.parameters || {},
     helpers: {
       getScopeGroupUserIds: (attributeName?: string): Promise<string[]> =>
