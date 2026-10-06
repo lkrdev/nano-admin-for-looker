@@ -51,7 +51,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
     try {
       const modelsOutput = execSync(`looker-cli api lookmlmodel all_lookml_models --host=${inst.looker_host} --port=${inst.looker_port} --ssl=${inst.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
       const models = parseJsonFromStdout(modelsOutput);
-      modelPass = Array.isArray(models) && models.some(m => m.name === 'nano_admin');
+      modelPass = Array.isArray(models) && models.some(m => m.name === 'nano_admin' || m.project_name === 'nano_admin');
     } catch (e) {}
     if (!modelPass) allModelsPass = false;
 

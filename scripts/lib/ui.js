@@ -48,9 +48,10 @@ function printDeploymentPreview(config, lookerUsers, status) {
       ? (lookerUsers.find(u => u.host === inst.looker_host)?.user || 'Authenticated User')
       : (lookerUsers || 'Authenticated User');
 
-    let saLabel = inst.looker_service_account || 'Auto-managed Service Account';
-    if (inst.looker_credential_method === 'manual') saLabel = 'N/A (Using manual credentials)';
-    else if (inst.looker_credential_method === 'reuse') saLabel = inst.looker_service_account ? `${inst.looker_service_account} (Reusing)` : 'Reusing Secret Manager creds';
+    let saLabel = 'Auto-managed Service Account';
+    if (inst.looker_credential_method === 'manual') saLabel = 'Using manual API credentials';
+    else if (inst.looker_credential_method === 'reuse') saLabel = 'Reusing Secret Manager credentials';
+    else if (inst.looker_service_account) saLabel = `Service Account ID ${inst.looker_service_account}`;
 
     console.log(`  [Instance ${idx + 1}] ${inst.looker_host}:${inst.looker_port} (SSL: ${inst.looker_ssl ? 'Yes' : 'No'})`);
     console.log(`      ├─ Service Account:   ${saLabel}`);
@@ -95,7 +96,7 @@ function printDeploymentSuccess(config, manifestContent, gcfUrl, isManifestUpToD
     ? config.instances
     : [{ looker_host: config.looker_host, looker_port: config.looker_port, looker_ssl: config.looker_ssl }];
 
-  console.log('\n🎉 Deployment and setup completed successfully! 🎉');
+  console.log('\n🎉 Deployment completed successfully! 🎉');
   console.log('----------------------------------------------------');
 
   if (isManifestUpToDate) {
