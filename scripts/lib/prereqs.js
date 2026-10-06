@@ -85,7 +85,7 @@ const fs = require('fs');
 const path = require('path');
 
 function validateLocalTooling() {
-  console.log('🔍 Phase 1: Validating local tooling (fast local checks)...');
+  console.log('🔍 Validating local tooling (fast local checks)...');
 
   try {
     execSync('node --version', { stdio: 'ignore' });

@@ -42,11 +42,22 @@ async function runPostDeploymentVerification(config, gcfUrl) {
 
   // 2. Per-Instance Verification
   const instanceResults = [];
+  let allProjectsPass = true;
   let allModelsPass = true;
   let allAttrsPass = true;
   let allManifestsPass = true;
+  let allIndexPass = true;
+  let allModelFilesPass = true;
 
   for (const inst of instances) {
+    let projectPass = false;
+    try {
+      const projOutput = execSync(`looker-cli api project project nano_admin --host=${inst.looker_host} --port=${inst.looker_port} --ssl=${inst.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+      const proj = parseJsonFromStdout(projOutput);
+      projectPass = Boolean(proj && (proj.id === 'nano_admin' || proj.name === 'nano_admin'));
+    } catch (e) {}
+    if (!projectPass) allProjectsPass = false;
+
     let modelPass = false;
     try {
       const modelsOutput = execSync(`looker-cli api lookmlmodel all_lookml_models --host=${inst.looker_host} --port=${inst.looker_port} --ssl=${inst.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
@@ -54,6 +65,24 @@ async function runPostDeploymentVerification(config, gcfUrl) {
       modelPass = Array.isArray(models) && models.some(m => m.name === 'nano_admin' || m.project_name === 'nano_admin');
     } catch (e) {}
     if (!modelPass) allModelsPass = false;
+
+    let indexPass = false;
+    let modelFilePass = false;
+    let modelFileName = '';
+    try {
+      const filesOutput = execSync(`looker-cli api project all_project_files nano_admin --host=${inst.looker_host} --port=${inst.looker_port} --ssl=${inst.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+      const files = parseJsonFromStdout(filesOutput);
+      if (Array.isArray(files)) {
+        indexPass = files.some(f => f.id === 'index.md' || f.path === 'index.md');
+        const mFile = files.find(f => f.extension === '.lkml' && (f.type === 'model' || f.id?.endsWith('.model.lkml')));
+        if (mFile) {
+          modelFilePass = true;
+          modelFileName = mFile.id || mFile.path;
+        }
+      }
+    } catch (e) {}
+    if (!indexPass) allIndexPass = false;
+    if (!modelFilePass) allModelFilesPass = false;
 
     let attrPass = false;
     let attrDetails = '';
@@ -108,11 +137,15 @@ async function runPostDeploymentVerification(config, gcfUrl) {
 
     instanceResults.push({
       host: inst.looker_host,
+      projectPass,
       modelPass,
       attrPass,
       attrDetails,
       manifestPass,
-      manifestDetails
+      manifestDetails,
+      indexPass,
+      modelFilePass,
+      modelFileName
     });
   }
 
@@ -126,6 +159,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
   console.log(`\nTarget Looker Instances (${instanceResults.length}):`);
   instanceResults.forEach((res, idx) => {
     console.log(`  [Instance ${idx + 1}] ${res.host}`);
+    console.log(`      ${res.projectPass ? '✅ PASS' : '❌ FAIL'} - Looker Project ('nano_admin')`);
     console.log(`      ${res.modelPass ? '✅ PASS' : '❌ FAIL'} - Looker Model Configuration ('nano_admin')`);
     console.log(`      ${res.attrPass ? '✅ PASS' : '❌ FAIL'} - Looker User Attribute Allowlist ${res.attrPass ? '' : res.attrDetails}`);
     if (res.manifestPass) {
@@ -133,15 +167,20 @@ async function runPostDeploymentVerification(config, gcfUrl) {
     } else {
       console.log(`      ⚠️ WARNING - Looker Production Manifest Entitlements [ACTION REQUIRED: Deploy extension manifest.lkml in project nano_admin. See details below.]`);
     }
+    console.log(`      ${res.indexPass ? '✅ PASS' : '⚠️ WARNING'} - Project Workflows Configuration ('index.md') ${res.indexPass ? '' : '[ACTION REQUIRED: Add workflow definitions to index.md]'}`);
+    console.log(`      ${res.modelFilePass ? '✅ PASS' : '⚠️ WARNING'} - LookML Model File ${res.modelFilePass ? `('${res.modelFileName}')` : '[ACTION REQUIRED: Add a model file (e.g. nano_admin.model.lkml)]'}`);
   });
   console.log('======================================================\n');
 
   return {
+    projectPass: allProjectsPass,
     modelPass: allModelsPass,
     functionPass,
     gcsPass,
     attrPass: allAttrsPass,
-    manifestPass: allManifestsPass
+    manifestPass: allManifestsPass,
+    indexPass: allIndexPass,
+    modelFilePass: allModelFilesPass
   };
 }
 

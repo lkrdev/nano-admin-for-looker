@@ -17,9 +17,12 @@ const {
   getSavedConnectionConfig,
   getSavedGCPConfig,
   getSavedServiceAccountConfig,
+  getSavedGitConfig,
   promptLookerConnection,
   promptGCPConfig,
-  promptLookerServiceAccount
+  promptLookerServiceAccount,
+  promptModelConfig,
+  promptGitConfig
 } = require('./lib/config');
 const {
   validateLocalTooling,
@@ -37,7 +40,12 @@ const {
   getLookerCredentials,
   updateLocalConfigs,
   configureLookerAttribute,
-  getLookerSaById
+  getLookerSaById,
+  discoverLookerProjectState,
+  ensureLookerProject,
+  ensureLookerModel,
+  configureLookerProjectGit,
+  inspectLookerProjectFiles
 } = require('./lib/looker');
 const {
   runPostDeploymentVerification
@@ -77,17 +85,15 @@ async function runFullDeploymentPipeline() {
   printHeader();
   logDeployStep('Initialization', 'Starting deployment run');
 
-  // Step 1: Validate local tooling (fast, no network, fail fast)
+  // Fast Local Validation
   validateLocalTooling();
 
-  // Step 2: Collect local settings for defaults or full re-use
+  // Local Defaults & Saved Configuration Evaluation
   const localDefaults = getLocalGCPDefaults();
   const config = loadConfig(CONFIG_PATH);
-
-  // Step 3: If complete, offer to re-use saved config
   const skipPrompts = await decideUseSavedConfig(config);
 
-  // Step 4: Prompt & validate target environments & deployment accounts
+  // Discovery and Prompting: Target Environments, Accounts & Resources
   await checkGCPAuth();
   const gcpConfig = skipPrompts ? getSavedGCPConfig(config) : await promptGCPConfig(config, localDefaults);
 
@@ -98,7 +104,12 @@ async function runFullDeploymentPipeline() {
     lookerUsers.push({ host: conn.looker_host, user });
   }
 
-  // Step 5: Service Configuration & Service Accounts (In-Memory Only, Non-Mutating)
+  const projectStates = [];
+  for (const conn of targetConnections) {
+    const state = await discoverLookerProjectState(conn, 'nano_admin', 'nano_admin');
+    projectStates.push(state);
+  }
+
   const saConfigs = [];
   for (const conn of targetConnections) {
     const existingInst = (config.instances || []).find(i => i.looker_host === conn.looker_host) || {};
@@ -114,9 +125,42 @@ async function runFullDeploymentPipeline() {
     saConfigs.push(saCfg);
   }
 
-  const mergedConfig = assembleMergedConfig(targetConnections, saConfigs, gcpConfig);
+  const modelConfigs = [];
+  for (let i = 0; i < targetConnections.length; i++) {
+    const conn = targetConnections[i];
+    const projectState = projectStates[i];
+    const existingInst = (config.instances || []).find(inst => inst.looker_host === conn.looker_host) || {};
+    const defaultFromPrevious = i > 0 ? modelConfigs[0] : null;
+    const modelCfg = skipPrompts
+      ? {
+          action: projectState.modelExists ? 'reuse' : 'create',
+          unlimited: existingInst.model_unlimited_db_connections !== false,
+          allowed_connections: existingInst.model_allowed_db_connection_names || []
+        }
+      : await promptModelConfig(conn, projectState, defaultFromPrevious);
+    modelConfigs.push(modelCfg);
+  }
 
-  // Step 6: Review & Confirm
+  const gitConfigs = [];
+  for (let i = 0; i < targetConnections.length; i++) {
+    const conn = targetConnections[i];
+    const projectState = projectStates[i];
+    const existingInst = (config.instances || []).find(inst => inst.looker_host === conn.looker_host) || {};
+    const defaultFromPrevious = i > 0 ? gitConfigs[0] : null;
+    const gitCfg = skipPrompts
+      ? {
+          action: projectState.gitType !== 'none' ? 'reuse' : 'create',
+          git_type: existingInst.git_type || (projectState.gitType !== 'none' ? projectState.gitType : 'bare'),
+          git_remote_url: existingInst.git_remote_url || projectState.gitRemoteUrl || '',
+          deploy_key: projectState.deployKey || null
+        }
+      : await promptGitConfig(conn, projectState, existingInst, defaultFromPrevious);
+    gitConfigs.push(gitCfg);
+  }
+
+  const mergedConfig = assembleMergedConfig(targetConnections, saConfigs, gcpConfig, gitConfigs, modelConfigs, projectStates);
+
+  // Confirmation Preview
   const resourceStatus = await scanExistingResources(mergedConfig, getLookerSaById);
   printDeploymentPreview(mergedConfig, lookerUsers, resourceStatus);
 
@@ -126,7 +170,7 @@ async function runFullDeploymentPipeline() {
     return;
   }
 
-  // Step 7: Execute (Mutations)
+  // Execution / Mutations (Strictly Confirmed Values)
   const multiInstanceCreds = {};
   for (let i = 0; i < mergedConfig.instances.length; i++) {
     const inst = mergedConfig.instances[i];
@@ -147,13 +191,6 @@ async function runFullDeploymentPipeline() {
   const { gcfUrl, secretManagerError } = await deployGCF(mergedConfig, { instances: multiInstanceCreds });
   logDeployStep('GCF Deployed', { gcfUrl, secretManagerError });
 
-  // Mark credential method as 'reuse' and save to disk ONLY after Secret Manager & GCF deployment succeed
-  for (let i = 0; i < mergedConfig.instances.length; i++) {
-    mergedConfig.instances[i].looker_credential_method = 'reuse';
-  }
-  saveConfig(CONFIG_PATH, mergedConfig);
-  logDeployStep('Configuration Saved Post-Deployment', extractSanitizedConfigSummary(mergedConfig));
-
   const publicUrl = `https://storage.googleapis.com/${mergedConfig.gcs_bucket_name}/`;
   const manifestContent = updateLocalConfigs(gcfUrl, publicUrl);
   logDeployStep('Configs Updated & Bundle Built', { gcfUrl, publicUrl });
@@ -166,17 +203,35 @@ async function runFullDeploymentPipeline() {
   }
   logDeployStep('Looker User Attributes Configured', { count: mergedConfig.instances.length });
 
+  const projectSetupResults = [];
+  for (const inst of mergedConfig.instances) {
+    const result = await setupLookerProjectAndGit(inst);
+    projectSetupResults.push(result);
+  }
+  logDeployStep('Looker Projects & Git Configured', { count: projectSetupResults.length });
+
+  // Mark credential method as 'reuse' and persist configuration to disk only after all mutations complete successfully
+  for (let i = 0; i < mergedConfig.instances.length; i++) {
+    mergedConfig.instances[i].looker_credential_method = 'reuse';
+  }
+  saveConfig(CONFIG_PATH, mergedConfig);
+  logDeployStep('Configuration Saved Post-Deployment', extractSanitizedConfigSummary(mergedConfig));
+
+  // Post-Deployment Verification
   const verificationResult = await runPostDeploymentVerification(mergedConfig, gcfUrl);
   logDeployStep('Post-Deployment Verification Completed', verificationResult);
 
-  printDeploymentSuccess(mergedConfig, manifestContent, gcfUrl, verificationResult?.manifestPass);
+  // Final Instructions
+  printDeploymentSuccess(mergedConfig, manifestContent, gcfUrl, verificationResult?.manifestPass, projectSetupResults);
   if (secretManagerError) {
     reportSecretManagerWarning(secretManagerError);
   }
   logDeployStep('Deployment Completed Successfully', { gcfUrl, publicUrl });
 }
 
-runDeployment().catch(handleDeploymentFailure);
+if (require.main === module) {
+  runDeployment().catch(handleDeploymentFailure);
+}
 
 // ============================================================================
 // HOISTED PURE HELPERS
@@ -190,7 +245,7 @@ function ensureConfigCompleteness(config) {
 }
 
 function evaluateValidationResults(results) {
-  const allPassed = results.modelPass && results.functionPass && results.gcsPass && results.attrPass && results.manifestPass;
+  const allPassed = results.projectPass && results.modelPass && results.functionPass && results.gcsPass && results.attrPass && results.manifestPass;
   if (allPassed) {
     console.log('🎉 All deployment verification checks PASSED!');
     logDeployStep('Validate Only Passed');
@@ -232,10 +287,18 @@ async function resolveInstanceConnections(config) {
   return instances;
 }
 
-function assembleMergedConfig(targetConnections, saConfigs, gcpConfig) {
+function assembleMergedConfig(targetConnections, saConfigs, gcpConfig, gitConfigs = [], modelConfigs = [], projectStates = []) {
   const instances = targetConnections.map((conn, idx) => ({
     ...conn,
-    ...(saConfigs[idx] || {})
+    ...(saConfigs[idx] || {}),
+    ...(gitConfigs[idx] || {}),
+    gitAction: gitConfigs[idx]?.action || 'create',
+    modelAction: modelConfigs[idx]?.action || (projectStates[idx]?.modelExists ? 'reuse' : 'create'),
+    modelSelection: modelConfigs[idx] || { unlimited: true, allowed_connections: [] },
+    projectAction: projectStates[idx]?.projectExists ? 'reuse' : 'create',
+    projectState: projectStates[idx] || null,
+    model_unlimited_db_connections: modelConfigs[idx]?.unlimited !== false,
+    model_allowed_db_connection_names: modelConfigs[idx]?.allowed_connections || []
   }));
 
   return {
@@ -246,7 +309,31 @@ function assembleMergedConfig(targetConnections, saConfigs, gcpConfig) {
     looker_port: instances[0]?.looker_port || '443',
     looker_ssl: instances[0]?.looker_ssl !== undefined ? instances[0].looker_ssl : true,
     looker_service_account: instances[0]?.looker_service_account || '',
-    looker_credential_method: instances[0]?.looker_credential_method || 'generate'
+    looker_credential_method: instances[0]?.looker_credential_method || 'generate',
+    git_type: instances[0]?.git_type || 'bare',
+    git_remote_url: instances[0]?.git_remote_url || '',
+    model_unlimited_db_connections: instances[0]?.model_unlimited_db_connections !== false,
+    model_allowed_db_connection_names: instances[0]?.model_allowed_db_connection_names || []
+  };
+}
+
+async function setupLookerProjectAndGit(inst) {
+  const projectRes = await ensureLookerProject(inst, 'nano_admin', inst.projectState);
+  const modelRes = await ensureLookerModel(inst, 'nano_admin', 'nano_admin', inst.modelSelection, inst.projectState);
+  const gitRes = await configureLookerProjectGit(inst, 'nano_admin', {
+    action: inst.gitAction,
+    git_type: inst.git_type,
+    git_remote_url: inst.git_remote_url,
+    deploy_key: inst.deploy_key
+  });
+  const filesRes = await inspectLookerProjectFiles(inst, 'nano_admin');
+
+  return {
+    host: inst.looker_host,
+    project: projectRes,
+    model: modelRes,
+    git: gitRes,
+    files: filesRes
   };
 }
 
@@ -277,3 +364,9 @@ function reportSecretManagerWarning(errorMessage) {
   console.warn('    Note: Credentials were NOT uploaded to environment variables to preserve security.');
   console.warn('    Please ensure LOOKERSDK_CLIENT_ID, LOOKERSDK_CLIENT_SECRET, and GCF_HMAC_SECRET are manually created/configured in Secret Manager.');
 }
+
+module.exports = {
+  runDeployment,
+  assembleMergedConfig,
+  setupLookerProjectAndGit
+};
