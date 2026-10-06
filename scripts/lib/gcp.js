@@ -176,6 +176,7 @@ async function deployGCF(config, lookerCreds) {
 
   console.log('\n📦 Compiling backend TypeScript code and generating build hash...');
   execSync('npm run backend:build', { stdio: 'inherit' });
+  syncBackendLockfile();
 
   const localBuildHash = loadLocalBuildHash();
   console.log(`Local Build Hash is: ${localBuildHash}`);
@@ -408,6 +409,15 @@ function resolveAllowedInstances(instances, fallbackHost, fallbackPort) {
   return Array.from(allowedSet).join(',');
 }
 
+function syncBackendLockfile() {
+  console.log('🔒 Synchronizing backend/package-lock.json for Cloud Functions deployment...');
+  try {
+    execSync('npm --prefix backend install --package-lock-only --no-workspaces', { stdio: 'inherit' });
+  } catch (err) {
+    console.warn(`⚠️ Warning: Failed to generate backend/package-lock.json: ${err.message}`);
+  }
+}
+
 module.exports = {
   sanitizeHostForSecret,
   loadLocalBuildHash,
@@ -416,5 +426,6 @@ module.exports = {
   scanExistingResources,
   deployGCF,
   deployExtensionToGCS,
-  resolveAllowedInstances
+  resolveAllowedInstances,
+  syncBackendLockfile
 };

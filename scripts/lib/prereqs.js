@@ -113,12 +113,13 @@ function validateLocalTooling() {
   }
 
   const rootNodeModules = path.join(__dirname, '..', '..', 'node_modules');
-  const backendNodeModules = path.join(__dirname, '..', '..', 'backend', 'node_modules');
-  const extensionNodeModules = path.join(__dirname, '..', '..', 'extension', 'node_modules');
+  const hasRootNodeModules = fs.existsSync(rootNodeModules);
+  const hasTypescript = fs.existsSync(path.join(rootNodeModules, 'typescript'));
+  const hasWebpack = fs.existsSync(path.join(rootNodeModules, 'webpack'));
 
-  if (!fs.existsSync(rootNodeModules) || !fs.existsSync(backendNodeModules) || !fs.existsSync(extensionNodeModules)) {
-    console.error('❌ Error: Required npm dependencies are missing.');
-    console.error('Please run "npm install" and "npm install --prefix backend" first before running the deployment script.');
+  if (!hasRootNodeModules || !hasTypescript || !hasWebpack) {
+    console.error('❌ Error: Required npm dependencies are missing or incomplete.');
+    console.error('Please run "npm install" from the project root before running the deployment script.');
     process.exit(1);
   }
 
