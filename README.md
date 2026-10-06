@@ -2,6 +2,9 @@
 
 This project contains a Looker Admin Extension (Frontend React app running in an iframe) and a Google Cloud Function (GCF Backend) running on Node.js to safely perform administrative Looker API operations on behalf of users.
 
+> [!WARNING]
+> As of October 2026, Private Service Connect (PSC) configurations (for use with Private IP and Hybrid instances) cannot use this extension.
+
 ---
 
 ## 🛠️ Prerequisites

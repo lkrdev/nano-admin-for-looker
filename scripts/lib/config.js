@@ -78,9 +78,7 @@ function saveConfig(configPath, config) {
   const safeInstances = (config.instances || []).map(inst => ({
     looker_host: inst.looker_host,
     looker_port: inst.looker_port || '443',
-    looker_ssl: inst.looker_ssl !== undefined ? inst.looker_ssl : true,
-    looker_service_account: inst.looker_service_account || '',
-    looker_credential_method: inst.looker_credential_method || 'generate'
+    looker_ssl: inst.looker_ssl !== undefined ? inst.looker_ssl : true
   }));
 
   const safeConfig = {
@@ -96,8 +94,6 @@ function saveConfig(configPath, config) {
     safeConfig.looker_host = safeInstances[0].looker_host;
     safeConfig.looker_port = safeInstances[0].looker_port;
     safeConfig.looker_ssl = safeInstances[0].looker_ssl;
-    safeConfig.looker_service_account = safeInstances[0].looker_service_account;
-    safeConfig.looker_credential_method = safeInstances[0].looker_credential_method;
   }
 
   fs.writeFileSync(configPath, JSON.stringify(safeConfig, null, 2), 'utf8');
@@ -146,19 +142,23 @@ function getSavedConnectionConfig(config) {
 }
 
 function getSavedGCPConfig(config) {
-  return {
+  const gcp = {
     gcp_project_id: config.gcp_project_id,
     gcp_region: config.gcp_region,
     gcf_name: config.gcf_name,
     gcs_bucket_name: config.gcs_bucket_name
   };
+  if (config.gcf_url) {
+    gcp.gcf_url = config.gcf_url;
+  }
+  return gcp;
 }
 
 function getSavedServiceAccountConfig(config, checkSecretsFn) {
   return (config.instances || []).map(inst => ({
     looker_host: inst.looker_host,
     looker_service_account: inst.looker_service_account || '',
-    looker_credential_method: checkSecretsFn && checkSecretsFn(config.gcp_project_id) ? 'reuse' : 'generate',
+    looker_credential_method: inst.looker_credential_method === 'reuse' || (checkSecretsFn && checkSecretsFn(config.gcp_project_id, [inst])) ? 'reuse' : 'generate',
     manual_client_id: '',
     manual_client_secret: ''
   }));
@@ -258,16 +258,20 @@ async function promptGCPConfig(config, localDefaults = {}) {
   const bucketInput = await askQuestion(`Enter GCS Bucket Name to host extension assets [${defaultBucket}]: `);
   const bucketName = bucketInput || defaultBucket;
 
-  return {
+  const res = {
     gcp_project_id: finalProjectId,
     gcp_region: region,
     gcf_name: functionName,
     gcs_bucket_name: bucketName
   };
+  if (config.gcf_url) {
+    res.gcf_url = config.gcf_url;
+  }
+  return res;
 }
 
 async function promptLookerServiceAccount(connectionConfig, gcpConfig, existingConfig = {}, checkSecretsFn) {
-  const secretsExist = checkSecretsFn && checkSecretsFn(gcpConfig.gcp_project_id);
+  const secretsExist = checkSecretsFn && checkSecretsFn(gcpConfig.gcp_project_id, [connectionConfig]);
 
   console.log(`\n🔎 Inspecting Looker host ${connectionConfig.looker_host} for existing service accounts...`);
   let matchedSAs = [];
@@ -330,7 +334,7 @@ async function promptLookerServiceAccount(connectionConfig, gcpConfig, existingC
 
   const selectedOpt = options[selectedIdx];
   let looker_credential_method = 'generate';
-  let looker_service_account = '';
+  let looker_service_account = existingConfig.looker_service_account || '';
   let manual_client_id = '';
   let manual_client_secret = '';
 

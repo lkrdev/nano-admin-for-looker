@@ -256,23 +256,25 @@ async function configureLookerAttribute(config, gcfUrl) {
         console.log(`✅ Looker user attribute "${attrName}" on ${config.looker_host} is already whitelisted for domain: ${domainOrigin}`);
         return;
       }
+
+      console.log(`Resetting user attribute "${attrName}" on ${config.looker_host} to update domain allowlist to ${domainOrigin}...`);
+      try {
+        execSync(`looker-cli api userattribute delete_user_attribute ${existingAttr.id} --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`, { stdio: 'pipe' });
+        console.log(`✅ Removed stale user attribute (${existingAttr.id}) to allow domain allowlist update.`);
+      } catch (delErr) {
+        console.warn(`⚠️ Warning: Could not delete existing user attribute: ${delErr.message}`);
+      }
     }
   } catch (e) {}
 
-  console.log(`Creating/Updating user attribute "${attrName}" on ${config.looker_host} with domain whitelist: ${domainOrigin}`);
+  console.log(`Creating user attribute "${attrName}" on ${config.looker_host} with domain whitelist: ${domainOrigin}`);
 
   try {
-    const cmd = `looker-cli attribute create ${attrName} "Nano Admin Challenge" --is-hidden --type=string --domain-allowlist="${domainOrigin}" --default-value="init_challenge" --force --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`;
+    const cmd = `looker-cli attribute create ${attrName} "Nano Admin Challenge" --is-hidden --type=string --domain-allowlist="${domainOrigin}" --default-value="init_challenge" --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`;
     execSync(cmd, { stdio: 'pipe' });
     console.log(`✅ Successfully configured Looker user attribute on ${config.looker_host}.`);
   } catch (e) {
-    const errText = (e.stderr ? e.stderr.toString() : '') + ' ' + (e.message || '');
-    if (errText.includes('cannot increase the number of domains matched by the hidden value domain whitelist')) {
-      console.warn(`⚠️  Notice: Looker host ${config.looker_host} prevented updating the domain whitelist because user challenge tokens already exist on the instance.`);
-      console.warn(`    If backend connectivity works, no action is needed. If you changed backend URLs, reset the attribute in Looker Admin -> User Attributes.`);
-    } else {
-      console.warn(`⚠️  Warning: Failed to configure Looker user attribute automatically via CLI on ${config.looker_host}:`, e.message);
-    }
+    console.warn(`⚠️  Warning: Failed to configure Looker user attribute automatically via CLI on ${config.looker_host}:`, e.message);
   }
 }
 

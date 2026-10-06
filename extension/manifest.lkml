@@ -18,7 +18,8 @@ application: admin_extension {
       "https://nano-admin-backend-3k5u7zcrka-nn.a.run.app",
       "https://storage.googleapis.com",
       "https://northamerica-northeast1-arg-nano-admin.cloudfunctions.net/nano-admin-backend",
-      "https://northamerica-northeast1-arg-nano-admin.cloudfunctions.net"
+      "https://northamerica-northeast1-arg-nano-admin.cloudfunctions.net",
+      "https://nano-admin-backend-3k5u7zcrka-ue.a.run.app"
     ]
   }
 }

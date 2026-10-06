@@ -31,33 +31,52 @@ function resolveGcfUrl(config) {
   let gcfUrl = '';
 
   try {
-    const rawUrl = execSync(`gcloud functions describe ${config.gcf_name} --region=${config.gcp_region} --project=${config.gcp_project_id} --format="value(url)"`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+    // For Gen 2 Cloud Functions, prefer the Cloud Run service URI (serviceConfig.uri)
+    // as it is compatible with Looker Google Cloud core Controlled Native Egress.
+    const runUri = execSync(
+      `gcloud functions describe ${config.gcf_name} --region=${config.gcp_region} --project=${config.gcp_project_id} --format="value(serviceConfig.uri)"`,
+      { encoding: 'utf8', stdio: 'pipe' }
+    ).trim();
+
+    if (runUri && runUri.startsWith('http')) {
+      return runUri;
+    }
+
+    const rawUrl = execSync(
+      `gcloud functions describe ${config.gcf_name} --region=${config.gcp_region} --project=${config.gcp_project_id} --format="value(url)"`,
+      { encoding: 'utf8', stdio: 'pipe' }
+    ).trim();
+
     if (rawUrl && rawUrl.startsWith('http')) {
       gcfUrl = rawUrl;
     }
   } catch (e) {}
 
-  if (!gcfUrl || gcfUrl.includes('.a.run.app')) {
-    gcfUrl = canonicalUrl;
-  }
-
-  return gcfUrl;
+  return gcfUrl || canonicalUrl;
 }
 
 function checkSecretsExistInGCP(projectId, instances = []) {
   if (!projectId) return false;
-  const targetHosts = Array.isArray(instances) && instances.length > 0
-    ? instances.map(i => i.looker_host || i)
-    : [];
-  if (targetHosts.length === 0) return false;
+  let targetHosts = [];
+  if (typeof instances === 'string' && instances.trim()) {
+    targetHosts = [instances.trim()];
+  } else if (Array.isArray(instances) && instances.length > 0) {
+    targetHosts = instances.map(i => (typeof i === 'string' ? i : i?.looker_host)).filter(Boolean);
+  } else if (instances && typeof instances === 'object' && instances.looker_host) {
+    targetHosts = [instances.looker_host];
+  }
 
   try {
-    for (const host of targetHosts) {
-      const sanitizedHost = sanitizeHostForSecret(host);
-      execSync(`gcloud secrets describe NANO_ADMIN_LOOKERSDK_CLIENT_ID_${sanitizedHost} --project=${projectId}`, { stdio: 'ignore' });
-      execSync(`gcloud secrets describe NANO_ADMIN_LOOKERSDK_CLIENT_SECRET_${sanitizedHost} --project=${projectId}`, { stdio: 'ignore' });
+    if (targetHosts.length > 0) {
+      for (const host of targetHosts) {
+        const sanitizedHost = sanitizeHostForSecret(host);
+        execSync(`gcloud secrets describe NANO_ADMIN_LOOKERSDK_CLIENT_ID_${sanitizedHost} --project=${projectId}`, { stdio: 'ignore' });
+        execSync(`gcloud secrets describe NANO_ADMIN_LOOKERSDK_CLIENT_SECRET_${sanitizedHost} --project=${projectId}`, { stdio: 'ignore' });
+      }
+      return true;
     }
-    return true;
+    const output = execSync(`gcloud secrets list --project=${projectId} --filter="name ~ NANO_ADMIN_LOOKERSDK_CLIENT_ID_" --format="value(name)"`, { encoding: 'utf8', stdio: 'pipe' });
+    return output.trim().length > 0;
   } catch (e) {
     return false;
   }

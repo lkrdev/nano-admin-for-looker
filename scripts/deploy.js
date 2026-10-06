@@ -106,7 +106,7 @@ async function runFullDeploymentPipeline() {
       ? {
           looker_host: conn.looker_host,
           looker_service_account: existingInst.looker_service_account || '',
-          looker_credential_method: checkSecretsExistInGCP(gcpConfig.gcp_project_id) ? 'reuse' : 'generate',
+          looker_credential_method: existingInst.looker_credential_method === 'reuse' || checkSecretsExistInGCP(gcpConfig.gcp_project_id, [conn]) ? 'reuse' : 'generate',
           manual_client_id: '',
           manual_client_secret: ''
         }
