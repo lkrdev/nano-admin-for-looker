@@ -1,7 +1,6 @@
 import fs from 'fs';
 import path from 'path';
 import { getWorkflows, getUserGroups, resolveAuthorizedGroups } from '../auth_utils';
-import { BUILD_HASH, BUILD_TIMESTAMP } from '../build_hash';
 import { ActionContext } from './registry';
 
 export async function getWorkflowsHandler(sdk: any, userId: string, payload: any, context?: ActionContext): Promise<any> {
@@ -31,8 +30,8 @@ export async function getWorkflowsHandler(sdk: any, userId: string, payload: any
     workflows: authorizedWorkflows,
     index_file_loaded: configData.indexFileLoaded !== false,
     parse_error: configData.parseError || null,
-    build_hash: BUILD_HASH,
-    build_timestamp: BUILD_TIMESTAMP
+    build_hash: process.env.BUILD_HASH || '',
+    build_timestamp: process.env.BUILD_TIMESTAMP || ''
   };
 }
 

@@ -1,8 +1,11 @@
 const path = require('path');
 const webpack = require('webpack');
+const { computeBuildHash } = require('../scripts/generate-hash');
 
 module.exports = (env, argv) => {
   const isProduction = argv.mode === 'production';
+  const buildHash = process.env.BUILD_HASH || computeBuildHash();
+  const buildTimestamp = process.env.BUILD_TIMESTAMP || new Date().toISOString();
 
   return {
     entry: './src/index.tsx',
@@ -48,7 +51,9 @@ module.exports = (env, argv) => {
     plugins: [
       new webpack.DefinePlugin({
         'process.env.BACKEND_URL': JSON.stringify(process.env.BACKEND_URL || ''),
-        'process.env.PUBLIC_PATH': JSON.stringify(process.env.PUBLIC_PATH || '')
+        'process.env.PUBLIC_PATH': JSON.stringify(process.env.PUBLIC_PATH || ''),
+        'process.env.BUILD_HASH': JSON.stringify(buildHash),
+        'process.env.BUILD_TIMESTAMP': JSON.stringify(buildTimestamp)
       })
     ],
     devtool: isProduction ? 'source-map' : 'eval-source-map'

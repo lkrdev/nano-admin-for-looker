@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync, spawn } = require('child_process');
 const crypto = require('crypto');
+const { computeBuildHash } = require('../generate-hash');
 
 function sanitizeHostForSecret(host) {
   const cleanHost = (host || '').trim().toLowerCase();
@@ -14,16 +15,11 @@ function sanitizeHostForSecret(host) {
 }
 
 function loadLocalBuildHash() {
-  let hash = '';
   try {
-    const hashFile = path.join(__dirname, '..', '..', 'backend', 'src', 'build_hash.ts');
-    if (fs.existsSync(hashFile)) {
-      const content = fs.readFileSync(hashFile, 'utf8');
-      const match = content.match(/BUILD_HASH\s*=\s*['"]([^'"]+)['"]/);
-      if (match) hash = match[1];
-    }
-  } catch (e) {}
-  return hash;
+    return computeBuildHash();
+  } catch (e) {
+    return '';
+  }
 }
 
 function resolveGcfUrl(config) {

@@ -1,6 +1,5 @@
 import { getWorkflows, isUserAuthorized, getScopeGroupUserIds, resolveUserIdLimitation, UserIdLimitationResult, UserIdLimitation } from '../auth_utils';
 import { ActionHandler } from './registry';
-import { BUILD_HASH, BUILD_TIMESTAMP } from '../build_hash';
 import { wrapLookerSDKWithLogging } from '../looker_logging_sdk';
 
 export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody, actionContext) => {
@@ -84,8 +83,8 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
       message: `Workflow "${workflowId}" executed successfully`,
       timestamp: new Date().toISOString(),
       result,
-      build_hash: BUILD_HASH,
-      build_timestamp: BUILD_TIMESTAMP
+      build_hash: process.env.BUILD_HASH || '',
+      build_timestamp: process.env.BUILD_TIMESTAMP || ''
     };
   } catch (error: any) {
     console.error(`Error in workflow template "${templateId}" handler:`, error);

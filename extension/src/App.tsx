@@ -1,8 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { LookerExtensionSDK } from '@looker/extension-sdk';
 import './App.css';
-import { BUILD_HASH, BUILD_TIMESTAMP } from './build_hash';
-import { BACKEND_URL } from './config';
+import { BACKEND_URL, BUILD_HASH, BUILD_TIMESTAMP } from './config';
 
 interface AppProps {
   extensionSDK: any;
