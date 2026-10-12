@@ -17,3 +17,7 @@ deploy-config.json
 backend/src/workflow-templates/
 extension/src/workflow-templates/
 
+# Ephemeral backend lockfile generated for Cloud Functions deployment
+backend/package-lock.json
+
+

@@ -78,7 +78,11 @@ function saveConfig(configPath, config) {
   const safeInstances = (config.instances || []).map(inst => ({
     looker_host: inst.looker_host,
     looker_port: inst.looker_port || '443',
-    looker_ssl: inst.looker_ssl !== undefined ? inst.looker_ssl : true
+    looker_ssl: inst.looker_ssl !== undefined ? inst.looker_ssl : true,
+    git_type: inst.git_type || 'bare',
+    git_remote_url: inst.git_remote_url || '',
+    model_unlimited_db_connections: inst.model_unlimited_db_connections !== false,
+    model_allowed_db_connection_names: inst.model_allowed_db_connection_names || []
   }));
 
   const safeConfig = {
@@ -94,6 +98,10 @@ function saveConfig(configPath, config) {
     safeConfig.looker_host = safeInstances[0].looker_host;
     safeConfig.looker_port = safeInstances[0].looker_port;
     safeConfig.looker_ssl = safeInstances[0].looker_ssl;
+    safeConfig.git_type = safeInstances[0].git_type;
+    safeConfig.git_remote_url = safeInstances[0].git_remote_url;
+    safeConfig.model_unlimited_db_connections = safeInstances[0].model_unlimited_db_connections;
+    safeConfig.model_allowed_db_connection_names = safeInstances[0].model_allowed_db_connection_names;
   }
 
   fs.writeFileSync(configPath, JSON.stringify(safeConfig, null, 2), 'utf8');
@@ -117,14 +125,17 @@ async function decideUseSavedConfig(config) {
     return false;
   }
   
-  console.log('\n📄 Phase 3: Found existing deployment configuration:');
+  console.log('\n📄 Found existing deployment configuration:');
   console.log(`  • GCP Project ID:         ${config.gcp_project_id}`);
   console.log(`  • GCP Region:             ${config.gcp_region}`);
   console.log(`  • Cloud Function Name:    ${config.gcf_name}`);
   console.log(`  • GCS Bucket Name:        ${config.gcs_bucket_name}`);
   console.log(`  • Target Looker Instances (${config.instances.length}):`);
   config.instances.forEach((inst, idx) => {
-    console.log(`      [${idx + 1}] Host: ${inst.looker_host}:${inst.looker_port} (SSL: ${inst.looker_ssl ? 'Yes' : 'No'})`);
+    const gitDesc = (inst.git_type === 'private' || inst.git_type === 'public')
+      ? `${inst.git_type} (${inst.git_remote_url || 'no url'})`
+      : (inst.git_type || 'bare');
+    console.log(`      [${idx + 1}] Host: ${inst.looker_host}:${inst.looker_port} (SSL: ${inst.looker_ssl ? 'Yes' : 'No'}) | Git: ${gitDesc}`);
   });
 
   const useSaved = await askQuestion('\nUse saved settings for this deployment? (Y/n): ');
@@ -161,6 +172,13 @@ function getSavedServiceAccountConfig(config, checkSecretsFn) {
     looker_credential_method: inst.looker_credential_method === 'reuse' || (checkSecretsFn && checkSecretsFn(config.gcp_project_id, [inst])) ? 'reuse' : 'generate',
     manual_client_id: '',
     manual_client_secret: ''
+  }));
+}
+
+function getSavedGitConfig(config) {
+  return (config.instances || []).map(inst => ({
+    git_type: inst.git_type || 'bare',
+    git_remote_url: inst.git_remote_url || ''
   }));
 }
 
@@ -238,7 +256,7 @@ async function promptLookerConnection(existingInstance = {}) {
 }
 
 async function promptGCPConfig(config, localDefaults = {}) {
-  console.log('\n⚙️ Phase 4: Configuring GCP settings...');
+  console.log('\n⚙️ Configuring GCP settings...');
   
   const defaultProj = config.gcp_project_id || localDefaults.defaultProject || '';
   const projectId = await askQuestion(`Enter GCP Project ID [${defaultProj}]: `);
@@ -365,6 +383,127 @@ async function promptLookerServiceAccount(connectionConfig, gcpConfig, existingC
   };
 }
 
+async function promptModelConfig(connectionConfig, projectState = {}, defaultFromPrevious = null) {
+  if (projectState.modelExists) {
+    return {
+      action: 'reuse',
+      unlimited: projectState.model?.unlimited_db_connections !== false,
+      allowed_connections: projectState.model?.allowed_db_connection_names || []
+    };
+  }
+
+  console.log(`\n📊 LookML Model Configuration for "nano_admin" on ${connectionConfig.looker_host}:`);
+  console.log('LookML models require a database connection setting in Looker.');
+
+  const available = projectState.availableConnections || [];
+  console.log('  1 = Unlimited database connections (access to all database connections, recommended for admin extensions)');
+  for (let i = 0; i < available.length; i++) {
+    console.log(`  ${i + 2} = Specific connection: "${available[i]}"`);
+  }
+
+  let defaultChoice = '1';
+  if (defaultFromPrevious && !defaultFromPrevious.unlimited && defaultFromPrevious.allowed_connections?.length > 0) {
+    const prevName = defaultFromPrevious.allowed_connections[0];
+    const foundIdx = available.indexOf(prevName);
+    if (foundIdx !== -1) {
+      defaultChoice = String(foundIdx + 2);
+    }
+  }
+
+  const defaultHint = defaultFromPrevious
+    ? ` [default: ${defaultChoice} (${defaultFromPrevious.unlimited ? 'unlimited' : defaultFromPrevious.allowed_connections?.[0]})]`
+    : ` [${defaultChoice}]`;
+
+  const answer = await askQuestion(`Select option${defaultHint}: `);
+  const choice = answer.trim() || defaultChoice;
+
+  if (choice === '1') {
+    return { action: 'create', unlimited: true, allowed_connections: [] };
+  }
+
+  const num = parseInt(choice, 10);
+  if (!isNaN(num) && num >= 2 && num <= available.length + 1) {
+    const selectedConn = available[num - 2];
+    return { action: 'create', unlimited: false, allowed_connections: [selectedConn] };
+  }
+
+  return { action: 'create', unlimited: true, allowed_connections: [] };
+}
+
+async function promptGitConfig(connectionConfig, projectState = {}, existingSavedConfig = {}, defaultFromPrevious = null) {
+  if (projectState.gitType && projectState.gitType !== 'none') {
+    console.log(`\n📦 Git Repository on ${connectionConfig.looker_host}:`);
+    console.log(`  Project "nano_admin" already has Git configured as [${projectState.gitType}]${projectState.gitRemoteUrl ? ` (${projectState.gitRemoteUrl})` : ''}.`);
+    const keepAnswer = await askQuestion('Keep existing Git configuration? (Y/n): ');
+    if (keepAnswer.trim().toLowerCase() !== 'n') {
+      return {
+        action: 'reuse',
+        git_type: projectState.gitType,
+        git_remote_url: projectState.gitRemoteUrl,
+        deploy_key: projectState.deployKey || null
+      };
+    }
+  }
+
+  console.log(`\n📦 Git Repository Configuration for Looker project "nano_admin" on ${connectionConfig.looker_host}:`);
+  console.log('  1 = Bare repository (hosted internally on Looker server)');
+  console.log('  2 = Private repository (external Git via SSH, e.g. git@github.com:org/repo.git)');
+  console.log('  3 = Public repository (external Git via HTTPS read-only, e.g. https://github.com/org/repo.git)');
+
+  let defaultChoice = '1';
+  let defaultUrl = '';
+
+  if (defaultFromPrevious && defaultFromPrevious.git_type) {
+    if (defaultFromPrevious.git_type === 'private') defaultChoice = '2';
+    else if (defaultFromPrevious.git_type === 'public') defaultChoice = '3';
+    else defaultChoice = '1';
+    defaultUrl = defaultFromPrevious.git_remote_url || '';
+  } else if (existingSavedConfig.git_type) {
+    if (existingSavedConfig.git_type === 'private') defaultChoice = '2';
+    else if (existingSavedConfig.git_type === 'public') defaultChoice = '3';
+    else defaultChoice = '1';
+    defaultUrl = existingSavedConfig.git_remote_url || '';
+  }
+
+  const defaultHint = defaultFromPrevious
+    ? ` [default: ${defaultChoice} (${defaultFromPrevious.git_type}${defaultUrl ? ` - ${defaultUrl}` : ''})]`
+    : ` [${defaultChoice}]`;
+
+  const choiceInput = await askQuestion(`Select Git repository type${defaultHint}: `);
+  const choice = choiceInput.trim() || defaultChoice;
+
+  if (choice === '2' || choice.toLowerCase() === 'private') {
+    const urlPrompt = defaultUrl ? `Enter Git SSH Remote URL [${defaultUrl}]: ` : 'Enter Git SSH Remote URL (e.g. git@github.com:org/repo.git): ';
+    const urlInput = await askQuestion(urlPrompt);
+    const remoteUrl = (urlInput || defaultUrl).trim();
+    return {
+      action: 'create',
+      git_type: 'private',
+      git_remote_url: remoteUrl,
+      deploy_key: projectState.deployKey || null
+    };
+  }
+
+  if (choice === '3' || choice.toLowerCase() === 'public') {
+    const urlPrompt = defaultUrl ? `Enter Git HTTPS Remote URL [${defaultUrl}]: ` : 'Enter Git HTTPS Remote URL (e.g. https://github.com/org/repo.git): ';
+    const urlInput = await askQuestion(urlPrompt);
+    const remoteUrl = (urlInput || defaultUrl).trim();
+    return {
+      action: 'create',
+      git_type: 'public',
+      git_remote_url: remoteUrl,
+      deploy_key: null
+    };
+  }
+
+  return {
+    action: 'create',
+    git_type: 'bare',
+    git_remote_url: '',
+    deploy_key: null
+  };
+}
+
 module.exports = {
   getLocalGCPDefaults,
   loadConfig,
@@ -374,7 +513,10 @@ module.exports = {
   getSavedConnectionConfig,
   getSavedGCPConfig,
   getSavedServiceAccountConfig,
+  getSavedGitConfig,
   promptLookerConnection,
   promptGCPConfig,
-  promptLookerServiceAccount
+  promptLookerServiceAccount,
+  promptModelConfig,
+  promptGitConfig
 };

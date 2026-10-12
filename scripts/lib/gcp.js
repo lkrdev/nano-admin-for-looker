@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync, spawn } = require('child_process');
 const crypto = require('crypto');
+const { computeBuildHash } = require('../generate-hash');
 
 function sanitizeHostForSecret(host) {
   const cleanHost = (host || '').trim().toLowerCase();
@@ -14,16 +15,11 @@ function sanitizeHostForSecret(host) {
 }
 
 function loadLocalBuildHash() {
-  let hash = '';
   try {
-    const hashFile = path.join(__dirname, '..', '..', 'backend', 'src', 'build_hash.ts');
-    if (fs.existsSync(hashFile)) {
-      const content = fs.readFileSync(hashFile, 'utf8');
-      const match = content.match(/BUILD_HASH\s*=\s*['"]([^'"]+)['"]/);
-      if (match) hash = match[1];
-    }
-  } catch (e) {}
-  return hash;
+    return computeBuildHash();
+  } catch (e) {
+    return '';
+  }
 }
 
 function resolveGcfUrl(config) {
@@ -176,6 +172,7 @@ async function deployGCF(config, lookerCreds) {
 
   console.log('\n📦 Compiling backend TypeScript code and generating build hash...');
   execSync('npm run backend:build', { stdio: 'inherit' });
+  syncBackendLockfile();
 
   const localBuildHash = loadLocalBuildHash();
   console.log(`Local Build Hash is: ${localBuildHash}`);
@@ -408,6 +405,15 @@ function resolveAllowedInstances(instances, fallbackHost, fallbackPort) {
   return Array.from(allowedSet).join(',');
 }
 
+function syncBackendLockfile() {
+  console.log('🔒 Synchronizing backend/package-lock.json for Cloud Functions deployment...');
+  try {
+    execSync('npm --prefix backend install --package-lock-only --no-workspaces', { stdio: 'inherit' });
+  } catch (err) {
+    console.warn(`⚠️ Warning: Failed to generate backend/package-lock.json: ${err.message}`);
+  }
+}
+
 module.exports = {
   sanitizeHostForSecret,
   loadLocalBuildHash,
@@ -416,5 +422,6 @@ module.exports = {
   scanExistingResources,
   deployGCF,
   deployExtensionToGCS,
-  resolveAllowedInstances
+  resolveAllowedInstances,
+  syncBackendLockfile
 };

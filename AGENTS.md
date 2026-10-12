@@ -2,6 +2,11 @@
 
 - `looker-cli --token-file` may be available in our dev environment to interact with the current Looker instance being used
 
+# Open Source Hygiene
+- Avoid corporate-specific, internal, or proprietary terminology, tool names, or network proxy references (e.g. internal proxies, helper binaries, or internal package managers).
+- Keep all log statements, comments, and troubleshooting diagnostics completely generic and standards-compliant.
+
+
 # Script Design Guidelines
 
 ## 1. Outline-like Main Function
@@ -15,9 +20,14 @@
 - Name functions to be clear and self-explanatory in the context of the main function
 - Write helper functions as pure functions (always pass their inputs explicitly as arguments, do not access outer scopes or closures)
 
-## 3. Open Source Hygiene
-- Avoid corporate-specific, internal, or proprietary terminology, tool names, or network proxy references (e.g. internal proxies, helper binaries, or internal package managers).
-- Keep all log statements, comments, and troubleshooting diagnostics completely generic and standards-compliant.
+## 3. `deploy.js` Execution Ordering & Lifecycle
+The deployment script must adhere to the below order/sequencing:
+- **Fast Local Validation**: Fail fast on missing local tools, dependencies, or invalid local syntax with zero network requests.
+- **Discovery and Prompting**: Inspect remote environments, existing resources, and dependencies in a read-only manner before and during prompting the user for selections. When choices are necessary (such as selecting database connections or repository types), prompt the user to choose from among discovered options. Make thoughtful implementation decisions around functionality between repeated deployment runs: some user selections (e.g. code deployment) warrant idempotent repetition of saved selections from prior deployments, while some user selections (e.g. setting write-only secrets or generating ssh keys) should reuse existing remote configurations/deployments when detected, instead of naive repetition of prior deployment selections.
+- **Confirmation Preview**: Render a unified preview summarizing discovered environment state alongside all planned mutations.
+- **Execution / Mutation**: Apply mutations strictly after explicit user confirmation. Mutations must be bounded to the confirmed options without surprise side effects or runtime fallback selections.
+- **Post-Deployment Verification**: Validate the operational health, configuration alignment, and accessibility of all deployed resources.
+- **Final Instructions**: Present actionable next steps, URLs, and manual workflows tailored directly to the verified deployment results.
 
 # React Coding Guidelines
 

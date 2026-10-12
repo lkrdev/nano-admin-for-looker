@@ -53,12 +53,41 @@ function printDeploymentPreview(config, lookerUsers, status) {
     else if (inst.looker_credential_method === 'reuse') saLabel = 'Reusing Secret Manager credentials';
     else if (inst.looker_service_account) saLabel = `Service Account ID ${inst.looker_service_account}`;
 
+    let projectLabel = inst.projectState?.projectExists ? 'Existing project (reusing)' : 'New project (will create)';
+
+    let modelLabel = 'Existing model (reusing)';
+    if (!inst.projectState?.modelExists) {
+      if (inst.modelSelection?.unlimited) {
+        modelLabel = 'New model (Unlimited database connections)';
+      } else if (inst.modelSelection?.allowed_connections?.length > 0) {
+        modelLabel = `New model (Connection: "${inst.modelSelection.allowed_connections[0]}")`;
+      } else {
+        modelLabel = 'New model (Unlimited database connections)';
+      }
+    }
+
+    let gitLabel = 'Bare repository (hosted on Looker server)';
+    const isGitReuse = inst.gitAction === 'reuse' || inst.gitConfig?.action === 'reuse';
+    const effectiveGitType = inst.git_type || inst.gitConfig?.git_type || 'bare';
+    const effectiveGitUrl = inst.git_remote_url || inst.gitConfig?.git_remote_url || '';
+
+    if (isGitReuse) {
+      gitLabel = `Existing Git connection (${effectiveGitType}${effectiveGitUrl ? ` - ${effectiveGitUrl}` : ''}, reusing)`;
+    } else if (effectiveGitType === 'private') {
+      gitLabel = `Private repository (${effectiveGitUrl || 'URL pending'})`;
+    } else if (effectiveGitType === 'public') {
+      gitLabel = `Public repository (${effectiveGitUrl || 'URL pending'})`;
+    }
+
     console.log(`  [Instance ${idx + 1}] ${inst.looker_host}:${inst.looker_port} (SSL: ${inst.looker_ssl ? 'Yes' : 'No'})`);
-    console.log(`      ├─ Service Account:   ${saLabel}`);
-    console.log(`      └─ Active Session:    ${user}`);
+    console.log(`      ├─ Service Account:      ${saLabel}`);
+    console.log(`      ├─ Project "nano_admin": ${projectLabel}`);
+    console.log(`      ├─ Model "nano_admin":   ${modelLabel}`);
+    console.log(`      ├─ Git Repository:       ${gitLabel}`);
+    console.log(`      └─ Active Session:       ${user}`);
   });
 
-  console.log('\nDeployment Actions & Resource Overwrites (Pending Phase 7 Execution):');
+  console.log('\nDeployment Actions & Resource Overwrites (Pending Execution Confirmation):');
   console.log('  [ ] Compile backend TypeScript code');
   console.log('  [ ] Compile & package extension React bundle');
   console.log(`  [ ] Deploy Google Cloud Function:`);
@@ -75,6 +104,23 @@ function printDeploymentPreview(config, lookerUsers, status) {
   console.log(`      └─ Secret Accessor Role:    [GRANT ACCESS TO DEFAULT GCP COMPUTE SERVICE ACCOUNT]`);
   console.log(`  [ ] GCP Project IAM Setup:`);
   console.log(`      └─ Cloud Build Builder Role: [GRANT roles/cloudbuild.builds.builder TO DEFAULT COMPUTE SERVICE ACCOUNT]`);
+  console.log(`  [ ] Looker Project & Model Provisioning ('nano_admin'):`);
+  instances.forEach((inst, idx) => {
+    const isProjReuse = inst.projectState?.projectExists || inst.projectAction === 'reuse';
+    const isModelReuse = inst.projectState?.modelExists || inst.modelAction === 'reuse';
+    const isGitReuse = inst.gitAction === 'reuse' || inst.gitConfig?.action === 'reuse';
+    const effectiveGitType = inst.git_type || inst.gitConfig?.git_type || 'bare';
+
+    const pText = isProjReuse ? 'REUSED (UNTOUCHED)' : 'NEWLY CREATED';
+    const mText = isModelReuse
+      ? 'REUSED (UNTOUCHED)'
+      : `CREATE WITH ${inst.modelSelection?.unlimited ? 'UNLIMITED CONNECTIONS' : `CONNECTION: ${inst.modelSelection?.allowed_connections?.[0]}`}`;
+    const gText = isGitReuse
+      ? 'REUSED (UNTOUCHED)'
+      : `CONFIGURE AS ${effectiveGitType.toUpperCase()}`;
+
+    console.log(`      ├─ [Instance ${idx + 1}] Project: [${pText}] | Model: [${mText}] | Git: [${gText}]`);
+  });
   console.log(`  [ ] Looker User Attribute (per instance):`);
   console.log(`      └─ nano_admin_admin_extension_nano_admin_challenge: [CREATE / FORCE-UPDATE ON ALL INSTANCES]`);
   console.log(`  [ ] Upload Extension Assets to GCS:`);
@@ -91,7 +137,7 @@ function printDeploymentCancelled() {
   console.log('\n❌ Deployment cancelled. No changes were applied.');
 }
 
-function printDeploymentSuccess(config, manifestContent, gcfUrl, isManifestUpToDate = false) {
+function printDeploymentSuccess(config, manifestContent, gcfUrl, isManifestUpToDate = false, projectResults = []) {
   const instances = Array.isArray(config.instances) && config.instances.length > 0
     ? config.instances
     : [{ looker_host: config.looker_host, looker_port: config.looker_port, looker_ssl: config.looker_ssl }];
@@ -99,8 +145,46 @@ function printDeploymentSuccess(config, manifestContent, gcfUrl, isManifestUpToD
   console.log('\n🎉 Deployment completed successfully! 🎉');
   console.log('----------------------------------------------------');
 
-  if (isManifestUpToDate) {
-    console.log('✅ Production manifest.lkml in Looker matches the required configuration across all instances. No action needed!');
+  if (projectResults && projectResults.length > 0) {
+    console.log('\n📦 Looker Project & Git Configuration:');
+    projectResults.forEach((res, idx) => {
+      console.log(`  [Instance ${idx + 1}] ${res.host}:`);
+      console.log(`      ├─ Project "nano_admin":       ${res.project?.created ? 'Newly created' : 'Verified (exists)'}`);
+      console.log(`      ├─ Model "nano_admin":         ${res.model?.created ? 'Newly configured' : 'Verified (exists)'}`);
+      const gitType = res.git?.git_type || 'bare';
+      const gitDesc = gitType === 'bare'
+        ? 'Bare repository (hosted on Looker server)'
+        : `${gitType} repository (${res.git?.git_remote_url || 'no url'})`;
+      console.log(`      ├─ Git Connection:             ${gitDesc}`);
+      
+      const filesDesc = [
+        res.files?.hasManifest ? 'manifest.lkml' : null,
+        res.files?.hasIndexMd ? 'index.md' : null,
+        res.files?.hasModelFile ? (res.files.modelFileName || '*.model.lkml') : null
+      ].filter(Boolean).join(', ') || 'none';
+      console.log(`      └─ Files Found in Project:     ${filesDesc}`);
+    });
+  }
+
+  const privateInstancesNeedingKey = (projectResults || []).filter(r => r.git?.git_type === 'private' && r.git?.deploy_key);
+  if (privateInstancesNeedingKey.length > 0) {
+    console.log('\n🔑 ACTION REQUIRED: REGISTER GIT DEPLOY KEYS (PRIVATE REPOSITORY):');
+    console.log('For each Looker instance, add the generated public SSH key as a Deploy Key in your remote Git repository:');
+    privateInstancesNeedingKey.forEach(r => {
+      console.log(`\n--- Public Deploy Key for ${r.host} (${r.git.git_remote_url || 'remote repo'}) ---`);
+      console.log(r.git.deploy_key);
+      console.log('----------------------------------------------------');
+    });
+    console.log('👉 In your Git provider (GitHub, GitLab, etc.), navigate to Repository Settings -> Deploy Keys -> Add deploy key.');
+    console.log('👉 Paste the public key above and grant Read access (or Read/Write if using Looker Git commit).');
+  }
+
+  const allManifestsPass = isManifestUpToDate && (projectResults.length === 0 || projectResults.every(r => r.files?.hasManifest));
+  const allIndexPass = projectResults.length === 0 || projectResults.every(r => r.files?.hasIndexMd);
+  const allModelFilesPass = projectResults.length === 0 || projectResults.every(r => r.files?.hasModelFile);
+
+  if (allManifestsPass && allIndexPass && allModelFilesPass && privateInstancesNeedingKey.length === 0) {
+    console.log('\n✅ Production manifest.lkml and project files are in place across all instances!');
     console.log('\nTarget Looker Extension Links:');
     instances.forEach((inst, idx) => {
       const protocol = 'https';
@@ -112,22 +196,39 @@ function printDeploymentSuccess(config, manifestContent, gcfUrl, isManifestUpToD
       console.log(`      👉 Link: ${extensionUrl}`);
     });
   } else {
-    console.log('\n⚠️  ACTION REQUIRED FOR LOOKER MANIFEST:');
-    console.log(`1. Open your Looker project manifest in project "nano_admin":`);
-    instances.forEach((inst, idx) => {
-      const protocol = 'https';
-      const hostPort = (inst.looker_port && String(inst.looker_port) !== '443')
-        ? `${inst.looker_host}:${inst.looker_port}`
-        : inst.looker_host;
-      const lookerIdeUrl = `${protocol}://${hostPort}/projects/nano_admin/files/manifest.lkml`;
-      console.log(`   👉 [Instance ${idx + 1}] ${inst.looker_host}: ${lookerIdeUrl}`);
-    });
-    console.log('\n2. Edit or create your "manifest.lkml" file and replace its content with the following:');
-    console.log('\n----------------- COPY FROM HERE -----------------');
-    console.log(manifestContent || 'manifest.lkml content could not be read.');
-    console.log('------------------ COPY TO HERE ------------------\n');
-    console.log('3. Commit, push, and deploy these manifest changes to production in your Looker project(s).');
-    console.log(`4. Open Looker, load the Nano Admin extension, and test the functionality:`);
+    console.log('\n📋 REQUIRED NEXT STEPS:');
+    let stepNumber = 1;
+
+    if (privateInstancesNeedingKey.length > 0) {
+      console.log(`\n${stepNumber++}. Register the public deploy key(s) listed above in your remote Git repository.`);
+    }
+
+    if (!allManifestsPass) {
+      console.log(`\n${stepNumber++}. In your Git repository or Looker project "nano_admin", create or update "manifest.lkml" with:`);
+      instances.forEach((inst, idx) => {
+        const protocol = 'https';
+        const hostPort = (inst.looker_port && String(inst.looker_port) !== '443')
+          ? `${inst.looker_host}:${inst.looker_port}`
+          : inst.looker_host;
+        const lookerIdeUrl = `${protocol}://${hostPort}/projects/nano_admin/files/manifest.lkml`;
+        console.log(`   👉 [Instance ${idx + 1}] IDE URL: ${lookerIdeUrl}`);
+      });
+      console.log('\n----------------- COPY FROM HERE -----------------');
+      console.log(manifestContent || 'manifest.lkml content could not be read.');
+      console.log('------------------ COPY TO HERE ------------------\n');
+      console.log('   Commit, push, and deploy this manifest to production.');
+    }
+
+    if (!allIndexPass) {
+      console.log(`\n${stepNumber++}. Add your workflow definitions file "index.md" to project "nano_admin" and deploy to production.`);
+      console.log('   (See template workflows in the project repository for reference syntax).');
+    }
+
+    if (!allModelFilesPass) {
+      console.log(`\n${stepNumber++}. Ensure a model file (such as "nano_admin.model.lkml" or "blank.model.lkml") exists in project "nano_admin".`);
+    }
+
+    console.log(`\n${stepNumber++}. Open Looker, load the Nano Admin extension, and test functionality:`);
     instances.forEach((inst, idx) => {
       const protocol = 'https';
       const hostPort = (inst.looker_port && String(inst.looker_port) !== '443')
