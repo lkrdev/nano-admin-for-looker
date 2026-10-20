@@ -157,13 +157,27 @@ async function getLookerCredentials(connectionConfig, saConfig) {
   return { clientId, clientSecret, serviceAccountId: targetSaId || saConfig.looker_service_account || '' };
 }
 
-function updateLocalConfigs(gcfUrl, publicUrl) {
+function updateLocalConfigs(gcfUrl, publicUrl, instances = [], canonicalGcfUrl = '') {
   if (!gcfUrl || !gcfUrl.startsWith('http')) {
     console.error(`\n💥 Fatal Error: Invalid Cloud Function backend URL passed to updateLocalConfigs: "${gcfUrl}"`);
     process.exit(1);
   }
 
   console.log('\n🔄 Generating manifest configuration in memory...');
+
+  const instanceAuthModesMap = {};
+  for (const inst of (instances || [])) {
+    if (inst && inst.looker_host) {
+      const cleanHost = inst.looker_host.trim().toLowerCase();
+      const mode = inst.auth_mode === 'oauth' ? 'oauth' : 'server_proxy';
+      instanceAuthModesMap[cleanHost] = mode;
+      const port = String(inst.looker_port || '443').trim();
+      if (port && port !== '443' && port !== '80') {
+        instanceAuthModesMap[`${cleanHost}:${port}`] = mode;
+      }
+    }
+  }
+  const instanceAuthModesJson = JSON.stringify(instanceAuthModesMap);
 
   const manifestPath = path.join(__dirname, '..', '..', 'extension', 'manifest.lkml');
   let manifest = '';
@@ -184,49 +198,98 @@ function updateLocalConfigs(gcfUrl, publicUrl) {
     }
 
     const gcfUrlOrigin = gcfUrl.replace(/\/+$/, '');
-    let domainOrigin = '';
-    try {
-      domainOrigin = new URL(gcfUrl).origin;
-    } catch (e) {}
+    const canonicalOrigin = canonicalGcfUrl ? canonicalGcfUrl.replace(/\/+$/, '') : '';
 
-    const requiredUrls = [
-      `"${gcfUrlOrigin}"`,
-      domainOrigin ? `"${domainOrigin}"` : null,
-      `"https://storage.googleapis.com"`
-    ].filter(Boolean);
+    const externalApiUrlSet = new Set([`"${gcfUrlOrigin}"`]);
+    if (canonicalOrigin) {
+      externalApiUrlSet.add(`"${canonicalOrigin}"`);
+    }
+    const externalApiUrlsList = Array.from(externalApiUrlSet);
+
+    const oauthUrlSet = new Set([
+      `"${gcfUrlOrigin}/oauth/authorize"`,
+      `"${gcfUrlOrigin}/oauth/token"`
+    ]);
+    if (canonicalOrigin) {
+      oauthUrlSet.add(`"${canonicalOrigin}/oauth/authorize"`);
+      oauthUrlSet.add(`"${canonicalOrigin}/oauth/token"`);
+    }
+    const requiredOAuthUrls = Array.from(oauthUrlSet);
+
+    manifest = manifest.replace(/\n?\s*oauth2_urls:\s*\[[\s\S]*?\]/g, '');
     manifest = manifest.replace(
-      /external_api_urls:\s*\[([\s\S]*?)\]/g,
-      (match, p1) => {
-        const urls = p1.split('\n')
-          .map(l => l.trim().replace(/,$/, ''))
-          .filter(Boolean);
-        
-        requiredUrls.forEach(reqUrl => {
-          if (!urls.includes(reqUrl)) {
-            urls.push(reqUrl);
-          }
-        });
-        
-        return `external_api_urls: [\n      ${urls.join(',\n      ')}\n    ]`;
-      }
+      /external_api_urls:\s*\[([\s\S]*?)\]/,
+      `external_api_urls: [\n      ${externalApiUrlsList.join(',\n      ')}\n    ]\n    oauth2_urls: [\n      ${requiredOAuthUrls.join(',\n      ')}\n    ]`
     );
+
     fs.writeFileSync(manifestPath, manifest, 'utf8');
     console.log('✅ Updated extension/manifest.lkml on disk.');
   }
 
   console.log('\n📦 Compiling extension React bundle with environment variables...');
   console.log(`👉 BACKEND_URL=${gcfUrl}`);
+  console.log(`👉 INSTANCE_AUTH_MODES=${instanceAuthModesJson}`);
   execSync('npm run extension:build', {
     stdio: 'inherit',
     env: {
       ...process.env,
       BACKEND_URL: gcfUrl,
-      PUBLIC_PATH: publicUrl
+      PUBLIC_PATH: publicUrl,
+      INSTANCE_AUTH_MODES: instanceAuthModesJson,
+      OAUTH_CLIENT_ID: 'nano_admin_oauth_client'
     }
   });
   console.log('✅ Compiled extension React bundle successfully.');
 
   return manifest;
+}
+
+async function configureLookerOAuthClient(config) {
+  const clientGuid = 'nano_admin_oauth_client';
+  const hostPort = (config.looker_port && String(config.looker_port) !== '443')
+    ? `${config.looker_host}:${config.looker_port}`
+    : config.looker_host;
+  const redirectUri = `https://${hostPort}/extensions/oauth2_redirect`;
+
+  console.log(`\n🔑 Configuring Looker OAuth 2.0 client application "${clientGuid}" on ${config.looker_host}...`);
+
+  const payload = JSON.stringify({
+    redirect_uri: redirectUri,
+    display_name: 'Nano Admin Extension',
+    description: 'OAuth 2.0 PKCE client for Nano Admin Extension',
+    enabled: true
+  });
+
+  try {
+    const existingOutput = execSync(`looker-cli api auth oauth_client_app ${clientGuid} --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const existingApp = parseJsonFromStdout(existingOutput);
+    if (existingApp && existingApp.client_guid === clientGuid) {
+      if (existingApp.enabled && existingApp.redirect_uri === redirectUri) {
+        console.log(`✅ Looker OAuth client "${clientGuid}" on ${config.looker_host} is already enabled with redirect_uri: ${redirectUri}`);
+        return;
+      }
+      console.log(`Updating existing Looker OAuth client "${clientGuid}" on ${config.looker_host}...`);
+      execSync(`echo '${payload}' | looker-cli api auth update_oauth_client_app ${clientGuid} - --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`, { stdio: 'pipe' });
+      console.log(`✅ Successfully updated Looker OAuth client "${clientGuid}" on ${config.looker_host}.`);
+      return;
+    }
+  } catch (e) {}
+
+  try {
+    console.log(`Registering Looker OAuth client "${clientGuid}" on ${config.looker_host} (redirect_uri: ${redirectUri})...`);
+    execSync(`echo '${payload}' | looker-cli api auth register_oauth_client_app ${clientGuid} - --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`, { stdio: 'pipe' });
+    console.log(`✅ Successfully registered Looker OAuth client "${clientGuid}" on ${config.looker_host}.`);
+  } catch (e) {
+    console.warn(`⚠️  Warning: Failed to register Looker OAuth client "${clientGuid}" on ${config.looker_host}: ${e.message}`);
+  }
+}
+
+async function configureLookerInstanceAuth(config, gcfUrl) {
+  if (config.auth_mode === 'oauth') {
+    await configureLookerOAuthClient(config);
+  } else {
+    await configureLookerAttribute(config, gcfUrl);
+  }
 }
 
 async function configureLookerAttribute(config, gcfUrl) {
@@ -595,6 +658,8 @@ module.exports = {
   getLookerCredentials,
   updateLocalConfigs,
   configureLookerAttribute,
+  configureLookerOAuthClient,
+  configureLookerInstanceAuth,
   discoverLookerProjectState,
   ensureLookerProject,
   ensureLookerModel,

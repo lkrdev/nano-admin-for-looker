@@ -13,13 +13,14 @@ application: admin_extension {
     scoped_user_attributes: ["nano_admin_challenge"]
     global_user_attributes: ["id"]
     external_api_urls: [
-      "http://localhost:8081",
-      "https://localhost:8081",
-      "https://nano-admin-backend-3k5u7zcrka-nn.a.run.app",
-      "https://storage.googleapis.com",
-      "https://northamerica-northeast1-arg-nano-admin.cloudfunctions.net/nano-admin-backend",
-      "https://northamerica-northeast1-arg-nano-admin.cloudfunctions.net",
-      "https://nano-admin-backend-3k5u7zcrka-ue.a.run.app"
+      "https://nano-admin-backend-3k5u7zcrka-ue.a.run.app",
+      "https://us-east1-arg-nano-admin.cloudfunctions.net/nano-admin-backend"
+    ]
+    oauth2_urls: [
+      "https://nano-admin-backend-3k5u7zcrka-ue.a.run.app/oauth/authorize",
+      "https://nano-admin-backend-3k5u7zcrka-ue.a.run.app/oauth/token",
+      "https://us-east1-arg-nano-admin.cloudfunctions.net/nano-admin-backend/oauth/authorize",
+      "https://us-east1-arg-nano-admin.cloudfunctions.net/nano-admin-backend/oauth/token"
     ]
   }
 }

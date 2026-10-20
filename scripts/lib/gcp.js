@@ -22,8 +22,15 @@ function loadLocalBuildHash() {
   }
 }
 
+function resolveCanonicalGcfUrl(config) {
+  if (!config || !config.gcp_region || !config.gcp_project_id || !config.gcf_name) {
+    return '';
+  }
+  return `https://${config.gcp_region}-${config.gcp_project_id}.cloudfunctions.net/${config.gcf_name}`;
+}
+
 function resolveGcfUrl(config) {
-  const canonicalUrl = `https://${config.gcp_region}-${config.gcp_project_id}.cloudfunctions.net/${config.gcf_name}`;
+  const canonicalUrl = resolveCanonicalGcfUrl(config);
   let gcfUrl = '';
 
   try {
@@ -265,21 +272,25 @@ async function deployGCF(config, lookerCreds) {
     console.warn(`⚠️ Warning: Secret Manager provisioning encountered an issue: ${smErr.message}`);
   }
 
-  const primaryHost = (config.instances && config.instances.length > 0) ? config.instances[0].looker_host : config.looker_host;
-  const primaryPort = (config.instances && config.instances.length > 0) ? config.instances[0].looker_port : config.looker_port;
   const allowedInstances = resolveAllowedInstances(config.instances, config.looker_host, config.looker_port);
+  const instanceAuthModesEnv = resolveInstanceAuthModesEnv(config.instances, config.looker_host, config.looker_port, config.auth_mode);
+
+  const ingressSettings = config.gcf_ingress_settings || 'all';
 
   console.log(`\n🚀 Deploying Cloud Function: ${config.gcf_name} to region ${config.gcp_region}...`);
   console.log(`Configuring instance allowlist: [${allowedInstances}]`);
+  console.log(`Configuring instance auth modes: [${instanceAuthModesEnv}]`);
+  console.log(`Configuring ingress settings: [${ingressSettings}]`);
   const deployCommand = `gcloud functions deploy ${config.gcf_name} \\
     --gen2 \\
     --runtime=nodejs24 \\
     --region=${config.gcp_region} \\
     --trigger-http \\
     --allow-unauthenticated \\
+    --ingress-settings=${ingressSettings} \\
     --entry-point=nanoAdminBackend \\
     --source=backend \\
-    --set-env-vars="LOOKERSDK_BASE_URL=https://${primaryHost}:${primaryPort},BUILD_HASH=${localBuildHash},LOOKER_ALLOWED_INSTANCES=${allowedInstances}" \\
+    --set-env-vars="BUILD_HASH=${localBuildHash},LOOKER_ALLOWED_INSTANCES=${allowedInstances},LOOKER_INSTANCE_AUTH_MODES=${instanceAuthModesEnv}" \\
     --set-secrets="${secretBindings.join(',')}"`;
 
   console.log(`Running deploy command:\n${deployCommand}\n`);
@@ -405,6 +416,26 @@ function resolveAllowedInstances(instances, fallbackHost, fallbackPort) {
   return Array.from(allowedSet).join(',');
 }
 
+function resolveInstanceAuthModesEnv(instances, fallbackHost, fallbackPort, fallbackAuthMode) {
+  const hostList = Array.isArray(instances) && instances.length > 0
+    ? instances
+    : [{ looker_host: fallbackHost, looker_port: fallbackPort, auth_mode: fallbackAuthMode }];
+
+  const entries = [];
+  for (const item of hostList) {
+    if (item && item.looker_host) {
+      const cleanHost = item.looker_host.trim().toLowerCase();
+      const mode = item.auth_mode === 'oauth' ? 'oauth' : 'server_proxy';
+      entries.push(`${cleanHost}=${mode}`);
+      const port = String(item.looker_port || '443').trim();
+      if (port && port !== '443' && port !== '80') {
+        entries.push(`${cleanHost}:${port}=${mode}`);
+      }
+    }
+  }
+  return entries.join(';');
+}
+
 function syncBackendLockfile() {
   console.log('🔒 Synchronizing backend/package-lock.json for Cloud Functions deployment...');
   try {
@@ -417,11 +448,13 @@ function syncBackendLockfile() {
 module.exports = {
   sanitizeHostForSecret,
   loadLocalBuildHash,
+  resolveCanonicalGcfUrl,
   resolveGcfUrl,
   checkSecretsExistInGCP,
   scanExistingResources,
   deployGCF,
   deployExtensionToGCS,
   resolveAllowedInstances,
+  resolveInstanceAuthModesEnv,
   syncBackendLockfile
 };

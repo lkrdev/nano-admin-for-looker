@@ -59,6 +59,7 @@ function loadConfig(configPath) {
             looker_host: config.looker_host,
             looker_port: config.looker_port || '443',
             looker_ssl: config.looker_ssl !== undefined ? config.looker_ssl : true,
+            auth_mode: config.auth_mode || 'server_proxy',
             looker_service_account: config.looker_service_account || '',
             looker_credential_method: config.looker_credential_method || 'generate'
           }
@@ -79,6 +80,7 @@ function saveConfig(configPath, config) {
     looker_host: inst.looker_host,
     looker_port: inst.looker_port || '443',
     looker_ssl: inst.looker_ssl !== undefined ? inst.looker_ssl : true,
+    auth_mode: inst.auth_mode === 'oauth' ? 'oauth' : 'server_proxy',
     git_type: inst.git_type || 'bare',
     git_remote_url: inst.git_remote_url || '',
     model_unlimited_db_connections: inst.model_unlimited_db_connections !== false,
@@ -89,6 +91,7 @@ function saveConfig(configPath, config) {
     gcp_project_id: config.gcp_project_id,
     gcp_region: config.gcp_region,
     gcf_name: config.gcf_name,
+    gcf_ingress_settings: normalizeIngressSettings(config.gcf_ingress_settings),
     gcs_bucket_name: config.gcs_bucket_name,
     instances: safeInstances
   };
@@ -98,6 +101,7 @@ function saveConfig(configPath, config) {
     safeConfig.looker_host = safeInstances[0].looker_host;
     safeConfig.looker_port = safeInstances[0].looker_port;
     safeConfig.looker_ssl = safeInstances[0].looker_ssl;
+    safeConfig.auth_mode = safeInstances[0].auth_mode;
     safeConfig.git_type = safeInstances[0].git_type;
     safeConfig.git_remote_url = safeInstances[0].git_remote_url;
     safeConfig.model_unlimited_db_connections = safeInstances[0].model_unlimited_db_connections;
@@ -129,13 +133,15 @@ async function decideUseSavedConfig(config) {
   console.log(`  • GCP Project ID:         ${config.gcp_project_id}`);
   console.log(`  • GCP Region:             ${config.gcp_region}`);
   console.log(`  • Cloud Function Name:    ${config.gcf_name}`);
+  console.log(`  • Cloud Function Ingress: ${normalizeIngressSettings(config.gcf_ingress_settings)}`);
   console.log(`  • GCS Bucket Name:        ${config.gcs_bucket_name}`);
   console.log(`  • Target Looker Instances (${config.instances.length}):`);
   config.instances.forEach((inst, idx) => {
     const gitDesc = (inst.git_type === 'private' || inst.git_type === 'public')
       ? `${inst.git_type} (${inst.git_remote_url || 'no url'})`
       : (inst.git_type || 'bare');
-    console.log(`      [${idx + 1}] Host: ${inst.looker_host}:${inst.looker_port} (SSL: ${inst.looker_ssl ? 'Yes' : 'No'}) | Git: ${gitDesc}`);
+    const authDesc = inst.auth_mode === 'oauth' ? 'OAuth 2.0 (PKCE)' : 'Server Proxy (Challenge)';
+    console.log(`      [${idx + 1}] Host: ${inst.looker_host}:${inst.looker_port} (SSL: ${inst.looker_ssl ? 'Yes' : 'No'}) | Auth: ${authDesc} | Git: ${gitDesc}`);
   });
 
   const useSaved = await askQuestion('\nUse saved settings for this deployment? (Y/n): ');
@@ -157,6 +163,7 @@ function getSavedGCPConfig(config) {
     gcp_project_id: config.gcp_project_id,
     gcp_region: config.gcp_region,
     gcf_name: config.gcf_name,
+    gcf_ingress_settings: normalizeIngressSettings(config.gcf_ingress_settings),
     gcs_bucket_name: config.gcs_bucket_name
   };
   if (config.gcf_url) {
@@ -206,6 +213,22 @@ function getLookerCliProfiles() {
   return profiles;
 }
 
+async function promptInstanceAuthMode(host, existingAuthMode = 'server_proxy') {
+  console.log(`\n🔒 Authentication Mode for ${host}:`);
+  console.log('  1 = Server Proxy (User attribute HMAC challenge)');
+  console.log('  2 = OAuth 2.0 (PKCE user token flow)');
+
+  const defaultChoice = existingAuthMode === 'oauth' ? '2' : '1';
+  const choiceInput = await askQuestion(`Select authentication mode [${defaultChoice}]: `);
+  const choice = (choiceInput || defaultChoice).trim();
+  const authMode = (choice === '2' || choice.toLowerCase() === 'oauth')
+    ? 'oauth'
+    : 'server_proxy';
+
+  console.log(`✅ Selected auth mode: ${authMode === 'oauth' ? 'OAuth 2.0 (PKCE)' : 'Server Proxy (Challenge)'}`);
+  return authMode;
+}
+
 async function promptLookerConnection(existingInstance = {}) {
   console.log('\n⚙️ Configuring Looker target instance connection...');
   
@@ -226,15 +249,19 @@ async function promptLookerConnection(existingInstance = {}) {
     if (!isNaN(choiceNum) && choiceNum >= 1 && choiceNum <= profiles.length) {
       const selected = profiles[choiceNum - 1];
       console.log(`✅ Selected profile '${selected.name}' (${selected.host}:${selected.port})`);
+      const authMode = await promptInstanceAuthMode(selected.host, existingInstance.auth_mode);
       return {
         looker_host: selected.host,
         looker_port: selected.port,
-        looker_ssl: selected.ssl
+        looker_ssl: selected.ssl,
+        auth_mode: authMode
       };
     } else if (choiceStr && !choiceStr.match(/^\d+$/)) {
       const host = choiceStr.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
       const portInput = await askQuestion(`Enter Looker API Port [${existingInstance.looker_port || '443'}]: `);
-      return { looker_host: host, looker_port: port, looker_ssl: true };
+      const port = portInput || existingInstance.looker_port || '443';
+      const authMode = await promptInstanceAuthMode(host, existingInstance.auth_mode);
+      return { looker_host: host, looker_port: port, looker_ssl: true, auth_mode: authMode };
     }
   }
 
@@ -247,11 +274,13 @@ async function promptLookerConnection(existingInstance = {}) {
   
   const portInput = await askQuestion(`Enter Looker API Port [${existingInstance.looker_port || '443'}]: `);
   const port = portInput || existingInstance.looker_port || '443';
+  const authMode = await promptInstanceAuthMode(host, existingInstance.auth_mode);
 
   return {
     looker_host: host,
     looker_port: port,
-    looker_ssl: true
+    looker_ssl: true,
+    auth_mode: authMode
   };
 }
 
@@ -272,6 +301,8 @@ async function promptGCPConfig(config, localDefaults = {}) {
   const gcfNameInput = await askQuestion(`Enter Cloud Function Name [${config.gcf_name || 'nano-admin-backend'}]: `);
   const functionName = gcfNameInput || config.gcf_name || 'nano-admin-backend';
 
+  const gcfIngressSettings = await promptGCFIngressSettings(config.gcf_ingress_settings);
+
   const defaultBucket = config.gcs_bucket_name || `${finalProjectId}-nano-admin-extension`;
   const bucketInput = await askQuestion(`Enter GCS Bucket Name to host extension assets [${defaultBucket}]: `);
   const bucketName = bucketInput || defaultBucket;
@@ -280,12 +311,44 @@ async function promptGCPConfig(config, localDefaults = {}) {
     gcp_project_id: finalProjectId,
     gcp_region: region,
     gcf_name: functionName,
+    gcf_ingress_settings: gcfIngressSettings,
     gcs_bucket_name: bucketName
   };
   if (config.gcf_url) {
     res.gcf_url = config.gcf_url;
   }
   return res;
+}
+
+function normalizeIngressSettings(val) {
+  const clean = String(val || '').trim().toLowerCase();
+  if (clean === 'internal-and-gclb' || clean === 'allow_internal_and_gclb') return 'internal-and-gclb';
+  if (clean === 'internal-only' || clean === 'allow_internal_only') return 'internal-only';
+  return 'all';
+}
+
+async function promptGCFIngressSettings(existingIngress = 'all') {
+  const normalizedExisting = normalizeIngressSettings(existingIngress);
+  console.log('\n🌐 Cloud Function Ingress Settings:');
+  console.log('  1 = all (Allow all traffic)');
+  console.log('  2 = internal-and-gclb (Allow traffic only from internal VPC sources or Cloud Load Balancing)');
+  console.log('  3 = internal-only (Allow traffic only from within the same project or VPC Service Controls perimeter)');
+
+  let defaultChoice = '1';
+  if (normalizedExisting === 'internal-and-gclb') defaultChoice = '2';
+  else if (normalizedExisting === 'internal-only') defaultChoice = '3';
+
+  const choiceInput = await askQuestion(`Select Cloud Function ingress setting [${defaultChoice}]: `);
+  const choice = (choiceInput || defaultChoice).trim().toLowerCase();
+
+  let selected = 'all';
+  if (choice === '2' || choice === 'internal-and-gclb') {
+    selected = 'internal-and-gclb';
+  } else if (choice === '3' || choice === 'internal-only') {
+    selected = 'internal-only';
+  }
+  console.log(`✅ Selected Cloud Function ingress: ${selected}`);
+  return selected;
 }
 
 async function promptLookerServiceAccount(connectionConfig, gcpConfig, existingConfig = {}, checkSecretsFn) {
@@ -514,8 +577,11 @@ module.exports = {
   getSavedGCPConfig,
   getSavedServiceAccountConfig,
   getSavedGitConfig,
+  promptInstanceAuthMode,
   promptLookerConnection,
   promptGCPConfig,
+  promptGCFIngressSettings,
+  normalizeIngressSettings,
   promptLookerServiceAccount,
   promptModelConfig,
   promptGitConfig

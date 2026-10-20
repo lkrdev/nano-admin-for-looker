@@ -30,6 +30,7 @@ const {
   ensureLookerLoggedIn
 } = require('./lib/prereqs');
 const {
+  resolveCanonicalGcfUrl,
   resolveGcfUrl,
   checkSecretsExistInGCP,
   scanExistingResources,
@@ -39,7 +40,7 @@ const {
 const {
   getLookerCredentials,
   updateLocalConfigs,
-  configureLookerAttribute,
+  configureLookerInstanceAuth,
   getLookerSaById,
   discoverLookerProjectState,
   ensureLookerProject,
@@ -192,16 +193,17 @@ async function runFullDeploymentPipeline() {
   logDeployStep('GCF Deployed', { gcfUrl, secretManagerError });
 
   const publicUrl = `https://storage.googleapis.com/${mergedConfig.gcs_bucket_name}/`;
-  const manifestContent = updateLocalConfigs(gcfUrl, publicUrl);
+  const canonicalGcfUrl = resolveCanonicalGcfUrl(mergedConfig);
+  const manifestContent = updateLocalConfigs(gcfUrl, publicUrl, mergedConfig.instances, canonicalGcfUrl);
   logDeployStep('Configs Updated & Bundle Built', { gcfUrl, publicUrl });
 
   await deployExtensionToGCS(mergedConfig);
   logDeployStep('Extension Uploaded to GCS', { gcs_bucket_name: mergedConfig.gcs_bucket_name });
 
   for (const inst of mergedConfig.instances) {
-    await configureLookerAttribute(inst, gcfUrl);
+    await configureLookerInstanceAuth(inst, gcfUrl);
   }
-  logDeployStep('Looker User Attributes Configured', { count: mergedConfig.instances.length });
+  logDeployStep('Looker Instance Authentication Configured', { count: mergedConfig.instances.length });
 
   const projectSetupResults = [];
   for (const inst of mergedConfig.instances) {
@@ -290,6 +292,7 @@ async function resolveInstanceConnections(config) {
 function assembleMergedConfig(targetConnections, saConfigs, gcpConfig, gitConfigs = [], modelConfigs = [], projectStates = []) {
   const instances = targetConnections.map((conn, idx) => ({
     ...conn,
+    auth_mode: conn.auth_mode === 'oauth' ? 'oauth' : 'server_proxy',
     ...(saConfigs[idx] || {}),
     ...(gitConfigs[idx] || {}),
     gitAction: gitConfigs[idx]?.action || 'create',
@@ -308,6 +311,7 @@ function assembleMergedConfig(targetConnections, saConfigs, gcpConfig, gitConfig
     looker_host: instances[0]?.looker_host || '',
     looker_port: instances[0]?.looker_port || '443',
     looker_ssl: instances[0]?.looker_ssl !== undefined ? instances[0].looker_ssl : true,
+    auth_mode: instances[0]?.auth_mode || 'server_proxy',
     looker_service_account: instances[0]?.looker_service_account || '',
     looker_credential_method: instances[0]?.looker_credential_method || 'generate',
     git_type: instances[0]?.git_type || 'bare',
@@ -342,6 +346,7 @@ function extractSanitizedConfigSummary(mergedConfig) {
     gcp_project_id: mergedConfig.gcp_project_id,
     gcp_region: mergedConfig.gcp_region,
     gcf_name: mergedConfig.gcf_name,
+    gcf_ingress_settings: mergedConfig.gcf_ingress_settings || 'all',
     gcs_bucket_name: mergedConfig.gcs_bucket_name,
     instanceCount: mergedConfig.instances.length
   };
@@ -362,7 +367,7 @@ function reportSecretManagerWarning(errorMessage) {
   console.warn('\n⚠️  SECRET MANAGER NOTICE:');
   console.warn(`    Automatic Secret Manager provisioning encountered an issue: ${errorMessage}`);
   console.warn('    Note: Credentials were NOT uploaded to environment variables to preserve security.');
-  console.warn('    Please ensure LOOKERSDK_CLIENT_ID, LOOKERSDK_CLIENT_SECRET, and GCF_HMAC_SECRET are manually created/configured in Secret Manager.');
+  console.warn('    Please ensure NANO_ADMIN_LOOKERSDK_CLIENT_ID_<sanitized_host>, NANO_ADMIN_LOOKERSDK_CLIENT_SECRET_<sanitized_host>, and GCF_HMAC_SECRET are manually created/configured in Secret Manager.');
 }
 
 module.exports = {
