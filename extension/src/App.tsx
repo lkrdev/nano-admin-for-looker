@@ -1,7 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { LookerExtensionSDK } from '@looker/extension-sdk';
 import './App.css';
-import { BACKEND_URL, BUILD_HASH, BUILD_TIMESTAMP } from './config';
+import { BUILD_HASH, BUILD_TIMESTAMP } from './config';
+import {
+  getLookerHost,
+  performOAuthLogin,
+  resolveInstanceAuthMode,
+  sendBackendRequest
+} from './backendClient';
 
 interface AppProps {
   extensionSDK: any;
@@ -122,8 +128,15 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
   const [validatingDev, setValidatingDev] = useState<boolean>(false);
   const [devValidationResult, setDevValidationResult] = useState<any | null>(null);
   const [showValidationModal, setShowValidationModal] = useState<boolean>(false);
+  const [oauthRequired, setOauthRequired] = useState<boolean>(false);
+  const [oauthAuthenticating, setOauthAuthenticating] = useState<boolean>(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
 
   const coreSDK = React.useMemo(() => LookerExtensionSDK.createClient(extensionSDK), [extensionSDK]);
+  const instanceAuthMode = React.useMemo(
+    () => resolveInstanceAuthMode(getLookerHost(extensionSDK)),
+    [extensionSDK]
+  );
 
   // Status Badge Logic
   const isGcfError = gcfStatus === 'offline' || gcfStatus === 'auth_error' || gcfStatus === 'other_error' || gcfStatus === 'error';
@@ -253,6 +266,12 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
                 {gcfStatus === 'other_error' && <span className="badge badge-error">Error</span>}
                 {gcfStatus === 'error' && <span className="badge badge-error">Offline / Error</span>}
               </div>
+              <div className="status-row">
+                <span>Auth Mode</span>
+                <span className="status-text">
+                  {instanceAuthMode === 'oauth' ? 'OAuth 2.0' : 'Server Proxy'}
+                </span>
+              </div>
 
               <div className="dropdown-divider"></div>
               <div className="dropdown-header">Build Details</div>
@@ -310,8 +329,64 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
         </div>
       )}
 
-      {/* Main Content Area: Switch between Dashboard View and Dedicated Page View */}
-      {activeWorkflowId && activeWorkflow ? (
+      {/* Main Content Area: Switch between OAuth Prompt, Dedicated Page View, and Dashboard View */}
+      {oauthRequired ? (
+        <section className="main-actions-section">
+          <div
+            className="card"
+            style={{
+              padding: '36px 24px',
+              textAlign: 'center',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              maxWidth: '520px',
+              margin: '24px auto'
+            }}
+          >
+            <div style={{ fontSize: '36px', marginBottom: '12px' }}>🔐</div>
+            <h3 style={{ margin: '0 0 8px 0', fontSize: '18px', fontWeight: '600', color: 'var(--text-main)' }}>
+              Looker OAuth Authorization Required
+            </h3>
+            <p
+              className="card-description"
+              style={{
+                margin: '0 0 20px 0',
+                maxWidth: '440px',
+                color: 'var(--text-muted)',
+                lineHeight: '1.5',
+                textAlign: 'center'
+              }}
+            >
+              This Looker instance is configured for Private/Hybrid IP authentication. Please authorize Nano Admin via Looker OAuth 2.0 to continue.
+            </p>
+            {oauthError && (
+              <div
+                style={{
+                  background: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  color: '#b91c1c',
+                  padding: '10px 14px',
+                  borderRadius: '6px',
+                  fontSize: '13px',
+                  marginBottom: '16px',
+                  width: '100%'
+                }}
+              >
+                {oauthError}
+              </div>
+            )}
+            <button
+              className="btn btn-primary"
+              onClick={handleOAuthSignInClick}
+              disabled={oauthAuthenticating}
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '8px' }}
+            >
+              <span>{oauthAuthenticating ? 'Authorizing with Looker...' : 'Authorize with Looker →'}</span>
+            </button>
+          </div>
+        </section>
+      ) : activeWorkflowId && activeWorkflow ? (
         <div className="page-view-section">
           {/* Shared Navigation Header / Interactive Breadcrumb */}
           <nav className="workflow-nav-bar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
@@ -804,6 +879,23 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
     }
   }
 
+  async function handleOAuthSignInClick() {
+    setOauthAuthenticating(true);
+    setOauthError(null);
+    try {
+      const userId = currentUser ? String(currentUser.id) : '';
+      await performOAuthLogin(extensionSDK, userId, addLog);
+      setOauthRequired(false);
+      await fetchUserAndWorkflows();
+    } catch (err: any) {
+      console.error('OAuth sign-in failed:', err);
+      setOauthError(err?.message || String(err));
+      setGcfStatus('auth_error');
+    } finally {
+      setOauthAuthenticating(false);
+    }
+  }
+
   async function callBackendAction(action: string, payload?: any) {
     addLog(`Initiating backend call for action '${action}'...`);
     setGcfStatus('checking');
@@ -812,31 +904,15 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
         action,
         ...payload
       };
-      const lookerHost = (extensionSDK as any)?.lookerHostData?.hostUrl || (extensionSDK as any)?.lookerHostData?.hostOrigin || '';
-      const headers = {
-        'Content-Type': 'application/json',
-        'Authorization': `looker-attribute-challenge ${extensionSDK.createSecretKeyTag('nano_admin_challenge')}`,
-        'X-Looker-User-ID': currentUser ? String(currentUser.id) : '',
-        'X-Looker-Instance-Host': lookerHost
-      };
-
-      let response = await extensionSDK.serverProxy(BACKEND_URL, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(requestPayload)
+      const userId = currentUser ? String(currentUser.id) : '';
+      const response = await sendBackendRequest({
+        extensionSDK,
+        userId,
+        payload: requestPayload,
+        allowInteractiveOAuth: true,
+        onBuildHash: checkBuildHash,
+        addLog
       });
-
-      if (response.status === 401) {
-        addLog(`Challenge required or expired. Retrying backend action '${action}'...`);
-        const errData = response.body;
-        checkBuildHash(errData);
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        response = await extensionSDK.serverProxy(BACKEND_URL, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(requestPayload)
-        });
-      }
 
       if (!response.ok) {
         const err = new Error(`HTTP Error: ${response.status}`);
@@ -846,12 +922,16 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
 
       const data = response.body;
       setGcfStatus('connected');
+      setOauthRequired(false);
       checkBuildHash(data);
       addLog(`Backend responded successfully for action '${action}'.`);
       return data;
     } catch (error: any) {
       console.error(error);
-      if (error.status === 401) {
+      if (error.oauthRequired || (error.status === 401 && instanceAuthMode === 'oauth')) {
+        setOauthRequired(true);
+        setGcfStatus('auth_error');
+      } else if (error.status === 401) {
         setGcfStatus('auth_error');
       } else if (error.status) {
         setGcfStatus('other_error');
@@ -951,50 +1031,32 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
   }
 
   async function fetchUserAndWorkflows() {
-    let userId = '';
-    let meInfo: any = null;
-    try {
-      addLog('Connecting to Looker Extension SDK...');
-      meInfo = await coreSDK.ok(coreSDK.me());
-      setCurrentUser(meInfo);
-      userId = String(meInfo.id);
-      addLog(`Authenticated as Looker User: ${meInfo.display_name} (${meInfo.email})`);
-    } catch (error) {
-      console.error(error);
-      addLog(`Error fetching user data from Looker: ${String(error)}`);
+    let userId = currentUser ? String(currentUser.id) : '';
+    let meInfo: any = currentUser;
+    if (!meInfo) {
+      try {
+        addLog('Connecting to Looker Extension SDK...');
+        meInfo = await coreSDK.ok(coreSDK.me());
+        setCurrentUser(meInfo);
+        userId = String(meInfo.id);
+        addLog(`Authenticated as Looker User: ${meInfo.display_name} (${meInfo.email})`);
+      } catch (error) {
+        console.error(error);
+        addLog(`Error fetching user data from Looker: ${String(error)}`);
+      }
     }
 
     addLog('Initiating backend call to fetch registered workflows...');
     setGcfStatus('checking');
     try {
-      const payload = {
-        action: 'get_workflows'
-      };
-      const lookerHost = (extensionSDK as any)?.lookerHostData?.hostUrl || (extensionSDK as any)?.lookerHostData?.hostOrigin || '';
-      const headers = {
-        'Content-Type': 'application/json',
-        'Authorization': `looker-attribute-challenge ${extensionSDK.createSecretKeyTag('nano_admin_challenge')}`,
-        'X-Looker-User-ID': userId,
-        'X-Looker-Instance-Host': lookerHost
-      };
-      
-      let response = await extensionSDK.serverProxy(BACKEND_URL, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(payload)
+      const response = await sendBackendRequest({
+        extensionSDK,
+        userId,
+        payload: { action: 'get_workflows' },
+        allowInteractiveOAuth: false,
+        onBuildHash: checkBuildHash,
+        addLog
       });
-
-      if (response.status === 401) {
-        addLog('Challenge required or expired. Retrying workflows fetch...');
-        const errData = response.body;
-        checkBuildHash(errData);
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        response = await extensionSDK.serverProxy(BACKEND_URL, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(payload)
-        });
-      }
 
       if (!response.ok) {
         const err = new Error(`HTTP Error: ${response.status}`);
@@ -1004,6 +1066,8 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
 
       const data = response.body;
       setGcfStatus('connected');
+      setOauthRequired(false);
+      setOauthError(null);
       checkBuildHash(data);
       if (data.index_file_loaded !== undefined) {
         setIndexFileLoaded(data.index_file_loaded);
@@ -1019,7 +1083,11 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
       addLog(`Backend responded successfully: Loaded ${data.workflows?.length || 0} workflows.`);
     } catch (error: any) {
       console.error(error);
-      if (error.status === 401) {
+      if (error.oauthRequired || (error.status === 401 && instanceAuthMode === 'oauth')) {
+        setOauthRequired(true);
+        setGcfStatus('auth_error');
+        addLog('Looker OAuth 2.0 authorization required.');
+      } else if (error.status === 401) {
         setGcfStatus('auth_error');
       } else if (error.status) {
         setGcfStatus('other_error');
@@ -1042,31 +1110,15 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
         workflowAction,
         payload
       };
-      const lookerHost = (extensionSDK as any)?.lookerHostData?.hostUrl || (extensionSDK as any)?.lookerHostData?.hostOrigin || '';
-      const headers = {
-        'Content-Type': 'application/json',
-        'Authorization': `looker-attribute-challenge ${extensionSDK.createSecretKeyTag('nano_admin_challenge')}`,
-        'X-Looker-User-ID': currentUser ? String(currentUser.id) : '',
-        'X-Looker-Instance-Host': lookerHost
-      };
-
-      let response = await extensionSDK.serverProxy(BACKEND_URL, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(requestPayload)
+      const userId = currentUser ? String(currentUser.id) : '';
+      const response = await sendBackendRequest({
+        extensionSDK,
+        userId,
+        payload: requestPayload,
+        allowInteractiveOAuth: true,
+        onBuildHash: checkBuildHash,
+        addLog
       });
-
-      if (response.status === 401) {
-        addLog('Challenge required or expired. Retrying workflow execution...');
-        const errData = response.body;
-        checkBuildHash(errData);
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        response = await extensionSDK.serverProxy(BACKEND_URL, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify(requestPayload)
-        });
-      }
 
       if (!response.ok) {
         const errData = typeof response.body === 'object' ? response.body : {};
@@ -1079,12 +1131,16 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
 
       const data = response.body;
       setGcfStatus('connected');
+      setOauthRequired(false);
       checkBuildHash(data);
       addLog(`Backend responded successfully for workflow: ${data.message || 'Success'}`);
       return data.result;
     } catch (error: any) {
       console.error(error);
-      if (error.status === 401) {
+      if (error.oauthRequired || (error.status === 401 && instanceAuthMode === 'oauth')) {
+        setOauthRequired(true);
+        setGcfStatus('auth_error');
+      } else if (error.status === 401) {
         setGcfStatus('auth_error');
       } else if (error.status) {
         setGcfStatus('other_error');

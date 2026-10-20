@@ -1,15 +1,16 @@
 import * as ff from '@google-cloud/functions-framework';
 import { LookerNodeSDK } from '@looker/sdk-node';
 import cors from 'cors';
-import { authenticateRequest } from './auth';
+import { authenticateRequestAsync } from './auth';
 import { checkRateLimit, refreshChallenge } from './challenge';
+import { handleOAuthAuthorize, handleOAuthTokenExchange } from './oauth';
 import { actionRegistry } from './actions/registry';
 import { wrapLookerSDKWithLogging } from './looker_logging_sdk';
 
 // Set up CORS configuration
 const corsHandler = cors({
   origin: true, // Allow all origins for dev, or configure specifically in production
-  methods: ['POST', 'OPTIONS'],
+  methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Nano-Admin-Challenge', 'X-Looker-User-ID', 'X-Looker-Instance-Host', 'X-Looker-Host'],
   credentials: true
 });
@@ -53,7 +54,10 @@ export function sanitizeHostForSecret(host: string): string {
 }
 
 function getSDKForInstance(trustedHost?: string): any {
-  const cleanHost = trustedHost ? trustedHost.trim().toLowerCase() : '__default__';
+  const cleanHost = trustedHost ? trustedHost.trim().toLowerCase() : '';
+  if (!cleanHost) {
+    throw new Error('Cannot initialize Looker SDK: missing Looker instance host.');
+  }
   if (sdkCache.has(cleanHost)) {
     return sdkCache.get(cleanHost);
   }
@@ -62,29 +66,22 @@ function getSDKForInstance(trustedHost?: string): any {
   const perInstClientId = process.env[`NANO_ADMIN_LOOKERSDK_CLIENT_ID_${sanitizedHost}`];
   const perInstClientSecret = process.env[`NANO_ADMIN_LOOKERSDK_CLIENT_SECRET_${sanitizedHost}`];
 
-  if (perInstClientId && perInstClientSecret) {
-    console.log(`[SDKManager] Initializing Looker SDK with Secret Manager credentials for host: ${cleanHost}`);
-    const baseUrl = `https://${cleanHost}`;
-    const customSettings = new CustomNodeSettings({
-      base_url: baseUrl,
-      client_id: perInstClientId,
-      client_secret: perInstClientSecret
-    });
-    const sdkInstance = LookerNodeSDK.init40(customSettings as any);
-    sdkCache.set(cleanHost, sdkInstance);
-    return sdkInstance;
+  if (!perInstClientId || !perInstClientSecret) {
+    throw new Error(
+      `Looker API credentials are not configured for instance host "${cleanHost}" (expected env vars NANO_ADMIN_LOOKERSDK_CLIENT_ID_${sanitizedHost} and NANO_ADMIN_LOOKERSDK_CLIENT_SECRET_${sanitizedHost}).`
+    );
   }
 
-  // Fallback to default LookerNodeSDK.init40() reading looker.ini / standard env for dev tests
-  try {
-    console.log(`[SDKManager] Initializing default LookerNodeSDK for host: ${cleanHost}`);
-    const defaultSdk = LookerNodeSDK.init40();
-    sdkCache.set(cleanHost, defaultSdk);
-    return defaultSdk;
-  } catch (e) {
-    console.error(`Fatal: Looker Node SDK failed to initialize for host: ${cleanHost}`, e);
-    throw e;
-  }
+  console.log(`[SDKManager] Initializing Looker SDK with Secret Manager credentials for host: ${cleanHost}`);
+  const baseUrl = `https://${cleanHost}`;
+  const customSettings = new CustomNodeSettings({
+    base_url: baseUrl,
+    client_id: perInstClientId,
+    client_secret: perInstClientSecret
+  });
+  const sdkInstance = LookerNodeSDK.init40(customSettings as any);
+  sdkCache.set(cleanHost, sdkInstance);
+  return sdkInstance;
 }
 
 // Sliding refresh cooldown map (userId -> lastRefreshTimestamp)
@@ -108,25 +105,66 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
       return;
     }
 
+    // Route OAuth 2.0 endpoints before standard RPC action handling
+    const requestPath = (req.path || req.url || '').split('?')[0].replace(/\/+$/, '');
+    if (requestPath.endsWith('/oauth/authorize')) {
+      handleOAuthAuthorize(req, res);
+      return;
+    }
+    if (requestPath.endsWith('/oauth/token')) {
+      await handleOAuthTokenExchange(req, res);
+      return;
+    }
+
     if (req.method !== 'POST') {
       res.status(405).json({ error: 'Method Not Allowed' });
       return;
     }
 
     // 1. Perform Authentication
-    const { trustedInstanceHost, trustedUserId, status, tokenAgeMs } = authenticateRequest(req);
+    const { trustedInstanceHost, trustedUserId, status, tokenAgeMs, authMode } = await authenticateRequestAsync(req);
     const userId = trustedUserId;
-    const targetSdk = getSDKForInstance(trustedInstanceHost);
+
+    if (status === 'forbidden') {
+      res.status(403).json({
+        error: 'forbidden',
+        message: `Looker instance host "${trustedInstanceHost}" is not permitted by this service.`
+      });
+      return;
+    }
+
+    if (!trustedInstanceHost) {
+      res.status(400).json({
+        error: 'missing_instance_host',
+        message: 'Looker instance host header (X-Looker-Instance-Host or X-Looker-Host) is missing.'
+      });
+      return;
+    }
+
+    if (status !== 'valid' && authMode === 'oauth') {
+      console.warn(`[DEBUG] OAuth authentication failed for user "${userId}" on "${trustedInstanceHost}" (Status: ${status}). Returning 401 oauth_required.`);
+      res.status(401).json({
+        error: 'oauth_required',
+        message: 'Looker OAuth access token is missing, expired, or invalid.',
+        build_hash: process.env.BUILD_HASH || '',
+        build_timestamp: process.env.BUILD_TIMESTAMP || ''
+      });
+      return;
+    }
+
+    let targetSdk: any;
+    try {
+      targetSdk = getSDKForInstance(trustedInstanceHost);
+    } catch (sdkErr: any) {
+      console.error(`[SDKManager] Failed to initialize Looker SDK for "${trustedInstanceHost}":`, sdkErr);
+      res.status(500).json({
+        error: 'sdk_configuration_error',
+        message: sdkErr.message || `Looker API credentials are not configured for host "${trustedInstanceHost}".`
+      });
+      return;
+    }
 
     if (status !== 'valid') {
-      if (status === 'forbidden') {
-        res.status(403).json({
-          error: 'forbidden',
-          message: `Looker instance host "${trustedInstanceHost}" is not permitted by this service.`
-        });
-        return;
-      }
-
       console.warn(`[DEBUG] Authentication failed for user "${userId}" on "${trustedInstanceHost}" (Status: ${status}). Resetting/refreshing challenge...`);
 
       if (!userId) {
@@ -152,7 +190,9 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
         console.log(`[DEBUG] Successfully refreshed challenge in Looker for user ${userId} on ${trustedInstanceHost}. Returning 401 to trigger client retry.`);
         res.status(401).json({
           error: 'challenge_required',
-          message: 'Authentication challenge is missing, expired, or invalid. A new challenge has been provisioned.'
+          message: 'Authentication challenge is missing, expired, or invalid. A new challenge has been provisioned.',
+          build_hash: process.env.BUILD_HASH || '',
+          build_timestamp: process.env.BUILD_TIMESTAMP || ''
         });
       } catch (err) {
         console.error(`Failed to refresh challenge for user ${userId} on ${trustedInstanceHost}:`, err);
@@ -161,9 +201,9 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
       return;
     }
 
-    // Status is 'valid': Perform asynchronous sliding refresh if token is older than 1 hour
+    // Status is 'valid': Perform asynchronous sliding refresh if challenge token is older than 1 hour
     const SLIDING_REFRESH_THRESHOLD_MS = 1 * 60 * 60 * 1000; // 1 hour
-    if (tokenAgeMs !== undefined && tokenAgeMs > SLIDING_REFRESH_THRESHOLD_MS) {
+    if (authMode !== 'oauth' && tokenAgeMs !== undefined && tokenAgeMs > SLIDING_REFRESH_THRESHOLD_MS) {
       if (checkSlidingRefreshCooldown(userId)) {
         console.log(`[DEBUG] Sliding refresh triggered for user ${userId} on ${trustedInstanceHost} (Token age: ${Math.round(tokenAgeMs / 60000)}m > 60m).`);
         refreshChallenge(targetSdk, trustedInstanceHost, userId).catch((err) => {
@@ -179,7 +219,7 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
       return;
     }
 
-    console.log(`[${new Date().toISOString()}] Action: "${action}" triggered by authenticated user: ${userId} on ${trustedInstanceHost}`);
+    console.log(`[${new Date().toISOString()}] Action: "${action}" triggered by authenticated user: ${userId} on ${trustedInstanceHost} (authMode: ${authMode || 'server_proxy'})`);
 
     const handler = actionRegistry.get(action);
     if (!handler) {

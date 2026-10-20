@@ -53,7 +53,9 @@ module.exports = (env, argv) => {
         'process.env.BACKEND_URL': JSON.stringify(process.env.BACKEND_URL || ''),
         'process.env.PUBLIC_PATH': JSON.stringify(process.env.PUBLIC_PATH || ''),
         'process.env.BUILD_HASH': JSON.stringify(buildHash),
-        'process.env.BUILD_TIMESTAMP': JSON.stringify(buildTimestamp)
+        'process.env.BUILD_TIMESTAMP': JSON.stringify(buildTimestamp),
+        'process.env.INSTANCE_AUTH_MODES': JSON.stringify(process.env.INSTANCE_AUTH_MODES || ''),
+        'process.env.OAUTH_CLIENT_ID': JSON.stringify(process.env.OAUTH_CLIENT_ID || 'nano_admin_oauth_client')
       })
     ],
     devtool: isProduction ? 'source-map' : 'eval-source-map'

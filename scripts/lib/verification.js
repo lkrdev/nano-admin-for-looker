@@ -28,9 +28,17 @@ async function runPostDeploymentVerification(config, gcfUrl) {
   // 1. Global Resource Verification
   let functionPass = false;
   let deployedHash = '';
+  let ingressSettings = '';
+  const configuredIngress = (config.gcf_ingress_settings || 'all').toLowerCase();
+  const expectedIngressEnum = configuredIngress === 'internal-and-gclb'
+    ? 'ALLOW_INTERNAL_AND_GCLB'
+    : configuredIngress === 'internal-only'
+      ? 'ALLOW_INTERNAL_ONLY'
+      : 'ALLOW_ALL';
   try {
     deployedHash = execSync(`gcloud functions describe ${config.gcf_name} --region=${config.gcp_region} --project=${config.gcp_project_id} --format="value(serviceConfig.environmentVariables.BUILD_HASH)"`, { encoding: 'utf8', stdio: 'pipe' }).trim();
-    functionPass = (deployedHash === localHash && localHash !== '');
+    ingressSettings = execSync(`gcloud functions describe ${config.gcf_name} --region=${config.gcp_region} --project=${config.gcp_project_id} --format="value(serviceConfig.ingressSettings)"`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+    functionPass = (deployedHash === localHash && localHash !== '' && (!ingressSettings || ingressSettings === expectedIngressEnum));
   } catch (e) {}
 
   let gcsPass = false;
@@ -86,31 +94,54 @@ async function runPostDeploymentVerification(config, gcfUrl) {
 
     let attrPass = false;
     let attrDetails = '';
-    try {
-      const attrOutput = execSync(`looker-cli api userattribute all_user_attributes --host=${inst.looker_host} --port=${inst.looker_port} --ssl=${inst.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
-      const attributes = parseJsonFromStdout(attrOutput);
-      const attr = Array.isArray(attributes) && attributes.find(a => a.name === 'nano_admin_admin_extension_nano_admin_challenge');
-      if (attr) {
-        const allowlistStr = Array.isArray(attr.hidden_value_domain_whitelist)
-          ? attr.hidden_value_domain_whitelist.join(',')
-          : String(attr.hidden_value_domain_whitelist || attr.domain_allowlist || '');
-        let domainOrigin = gcfUrl;
-        try {
-          if (gcfUrl && gcfUrl.startsWith('http')) {
-            domainOrigin = new URL(gcfUrl).origin;
+    const isOAuthMode = inst.auth_mode === 'oauth';
+    if (isOAuthMode) {
+      const hostPort = (inst.looker_port && String(inst.looker_port) !== '443')
+        ? `${inst.looker_host}:${inst.looker_port}`
+        : inst.looker_host;
+      const expectedRedirectUri = `https://${hostPort}/extensions/oauth2_redirect`;
+      try {
+        const oauthOutput = execSync(`looker-cli api auth oauth_client_app nano_admin_oauth_client --host=${inst.looker_host} --port=${inst.looker_port} --ssl=${inst.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+        const oauthApp = parseJsonFromStdout(oauthOutput);
+        if (oauthApp && oauthApp.client_guid === 'nano_admin_oauth_client') {
+          if (oauthApp.enabled && oauthApp.redirect_uri === expectedRedirectUri) {
+            attrPass = true;
+          } else {
+            attrDetails = `(OAuth client enabled=${oauthApp.enabled}, redirect_uri=${oauthApp.redirect_uri}, expected=${expectedRedirectUri})`;
           }
-        } catch (e) {}
-
-        if (!gcfUrl || allowlistStr.includes(domainOrigin) || allowlistStr.includes(gcfUrl)) {
-          attrPass = true;
         } else {
-          attrDetails = `(Missing ${domainOrigin} in domain allowlist: [${allowlistStr}])`;
+          attrDetails = `(OAuth client 'nano_admin_oauth_client' not found)`;
         }
-      } else {
-        attrDetails = `(User attribute 'nano_admin_admin_extension_nano_admin_challenge' not found)`;
+      } catch (e) {
+        attrDetails = `(${e.message})`;
       }
-    } catch (e) {
-      attrDetails = `(${e.message})`;
+    } else {
+      try {
+        const attrOutput = execSync(`looker-cli api userattribute all_user_attributes --host=${inst.looker_host} --port=${inst.looker_port} --ssl=${inst.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+        const attributes = parseJsonFromStdout(attrOutput);
+        const attr = Array.isArray(attributes) && attributes.find(a => a.name === 'nano_admin_admin_extension_nano_admin_challenge');
+        if (attr) {
+          const allowlistStr = Array.isArray(attr.hidden_value_domain_whitelist)
+            ? attr.hidden_value_domain_whitelist.join(',')
+            : String(attr.hidden_value_domain_whitelist || attr.domain_allowlist || '');
+          let domainOrigin = gcfUrl;
+          try {
+            if (gcfUrl && gcfUrl.startsWith('http')) {
+              domainOrigin = new URL(gcfUrl).origin;
+            }
+          } catch (e) {}
+
+          if (!gcfUrl || allowlistStr.includes(domainOrigin) || allowlistStr.includes(gcfUrl)) {
+            attrPass = true;
+          } else {
+            attrDetails = `(Missing ${domainOrigin} in domain allowlist: [${allowlistStr}])`;
+          }
+        } else {
+          attrDetails = `(User attribute 'nano_admin_admin_extension_nano_admin_challenge' not found)`;
+        }
+      } catch (e) {
+        attrDetails = `(${e.message})`;
+      }
     }
     if (!attrPass) allAttrsPass = false;
 
@@ -120,12 +151,18 @@ async function runPostDeploymentVerification(config, gcfUrl) {
       const gcsBundleUrl = `https://storage.googleapis.com/${config.gcs_bucket_name}/bundle.js`;
       const prodManifestContent = execSync(`looker-cli project file cat nano_admin manifest.lkml --host=${inst.looker_host} --port=${inst.looker_port} --ssl=${inst.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
       if (prodManifestContent) {
+        const gcfUrlOrigin = gcfUrl ? gcfUrl.replace(/\/+$/, '') : '';
         const hasGcf = !gcfUrl || prodManifestContent.includes(gcfUrl);
         const hasGcs = prodManifestContent.includes(gcsBundleUrl);
-        if (hasGcf && hasGcs) {
+        const hasOAuthUrls = !isOAuthMode || !gcfUrlOrigin || (
+          prodManifestContent.includes('oauth2_urls') &&
+          prodManifestContent.includes(`${gcfUrlOrigin}/oauth/authorize`) &&
+          prodManifestContent.includes(`${gcfUrlOrigin}/oauth/token`)
+        );
+        if (hasGcf && hasGcs && hasOAuthUrls) {
           manifestPass = true;
         } else {
-          manifestDetails = `(Manifest missing URLs: gcfUrl=${hasGcf}, bundleUrl=${hasGcs})`;
+          manifestDetails = `(Manifest missing URLs: gcfUrl=${hasGcf}, bundleUrl=${hasGcs}, oauth2Urls=${hasOAuthUrls})`;
         }
       } else {
         manifestDetails = `(Could not read manifest.lkml from Looker project)`;
@@ -137,6 +174,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
 
     instanceResults.push({
       host: inst.looker_host,
+      authMode: isOAuthMode ? 'oauth' : 'server_proxy',
       projectPass,
       modelPass,
       attrPass,
@@ -153,7 +191,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
   console.log('🔍 POST-DEPLOYMENT VERIFICATION RESULTS');
   console.log('======================================================');
   console.log('Global Backend & Static Assets:');
-  console.log(`  ${functionPass ? '✅ PASS' : '❌ FAIL'} - Deployed Cloud Function Hash (Local: ${localHash || 'Unknown'}, Deployed: ${deployedHash || 'None'})`);
+  console.log(`  ${functionPass ? '✅ PASS' : '❌ FAIL'} - Deployed Cloud Function Hash & Ingress (Local: ${localHash || 'Unknown'}, Deployed: ${deployedHash || 'None'}, Ingress: ${ingressSettings || 'Unknown'})`);
   console.log(`  ${gcsPass ? '✅ PASS' : '❌ FAIL'} - GCS Hosted JS Bundle Hash Match`);
 
   console.log(`\nTarget Looker Instances (${instanceResults.length}):`);
@@ -161,7 +199,10 @@ async function runPostDeploymentVerification(config, gcfUrl) {
     console.log(`  [Instance ${idx + 1}] ${res.host}`);
     console.log(`      ${res.projectPass ? '✅ PASS' : '❌ FAIL'} - Looker Project ('nano_admin')`);
     console.log(`      ${res.modelPass ? '✅ PASS' : '❌ FAIL'} - Looker Model Configuration ('nano_admin')`);
-    console.log(`      ${res.attrPass ? '✅ PASS' : '❌ FAIL'} - Looker User Attribute Allowlist ${res.attrPass ? '' : res.attrDetails}`);
+    const authCheckLabel = res.authMode === 'oauth'
+      ? "Looker OAuth Client ('nano_admin_oauth_client')"
+      : 'Looker User Attribute Allowlist';
+    console.log(`      ${res.attrPass ? '✅ PASS' : '❌ FAIL'} - ${authCheckLabel} ${res.attrPass ? '' : res.attrDetails}`);
     if (res.manifestPass) {
       console.log(`      ✅ PASS - Looker Production Manifest Entitlements (Matches required configuration)`);
     } else {

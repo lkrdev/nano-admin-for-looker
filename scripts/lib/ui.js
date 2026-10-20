@@ -39,6 +39,7 @@ function printDeploymentPreview(config, lookerUsers, status) {
   console.log(`  • GCP Project ID:         ${config.gcp_project_id}`);
   console.log(`  • GCP Region:             ${config.gcp_region}`);
   console.log(`  • Cloud Function Name:    ${config.gcf_name}`);
+  console.log(`  • Cloud Function Ingress: ${config.gcf_ingress_settings || 'all'}`);
   console.log(`  • GCS Bucket Name:        ${config.gcs_bucket_name}`);
   console.log(`  • Active GCP Account:     ${status.gcpAccount || 'Authenticated User'}`);
   
@@ -79,7 +80,12 @@ function printDeploymentPreview(config, lookerUsers, status) {
       gitLabel = `Public repository (${effectiveGitUrl || 'URL pending'})`;
     }
 
+    const authLabel = inst.auth_mode === 'oauth'
+      ? 'OAuth 2.0 (PKCE)'
+      : 'Server Proxy (User Attribute Challenge)';
+
     console.log(`  [Instance ${idx + 1}] ${inst.looker_host}:${inst.looker_port} (SSL: ${inst.looker_ssl ? 'Yes' : 'No'})`);
+    console.log(`      ├─ Auth Mode:            ${authLabel}`);
     console.log(`      ├─ Service Account:      ${saLabel}`);
     console.log(`      ├─ Project "nano_admin": ${projectLabel}`);
     console.log(`      ├─ Model "nano_admin":   ${modelLabel}`);
@@ -121,8 +127,15 @@ function printDeploymentPreview(config, lookerUsers, status) {
 
     console.log(`      ├─ [Instance ${idx + 1}] Project: [${pText}] | Model: [${mText}] | Git: [${gText}]`);
   });
-  console.log(`  [ ] Looker User Attribute (per instance):`);
-  console.log(`      └─ nano_admin_admin_extension_nano_admin_challenge: [CREATE / FORCE-UPDATE ON ALL INSTANCES]`);
+  console.log(`  [ ] Looker Authentication Provisioning (per instance):`);
+  instances.forEach((inst, idx) => {
+    const branchChar = idx === instances.length - 1 ? '└─' : '├─';
+    if (inst.auth_mode === 'oauth') {
+      console.log(`      ${branchChar} [Instance ${idx + 1}] OAuth Client ('nano_admin_oauth_client'): [REGISTER / VERIFY REDIRECT URI]`);
+    } else {
+      console.log(`      ${branchChar} [Instance ${idx + 1}] User Attribute ('nano_admin_admin_extension_nano_admin_challenge'): [CREATE / VERIFY DOMAIN ALLOWLIST]`);
+    }
+  });
   console.log(`  [ ] Upload Extension Assets to GCS:`);
   console.log(`      └─ Destination: gs://${config.gcs_bucket_name}/`);
   console.log('======================================================');
