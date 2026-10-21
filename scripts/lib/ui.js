@@ -194,15 +194,16 @@ function printDeploymentSuccess(config, manifestContent, gcfUrl, isManifestUpToD
 
   const allManifestsPass = isManifestUpToDate && (projectResults.length === 0 || projectResults.every(r => r.files?.hasManifest));
   const allIndexPass = projectResults.length === 0 || projectResults.every(r => r.files?.hasIndexMd);
-  const allModelFilesPass = projectResults.length === 0 || projectResults.every(r => r.files?.hasModelFile);
+  const allModelFilesPass = projectResults.length === 0 || projectResults.every(r => r.files?.modelFilePass !== undefined ? r.files.modelFilePass : r.files?.hasModelFile);
 
   if (allManifestsPass && allIndexPass && allModelFilesPass && privateInstancesNeedingKey.length === 0) {
     console.log('\n✅ Production manifest.lkml and project files are in place across all instances!');
     console.log('\nTarget Looker Extension Links:');
     instances.forEach((inst, idx) => {
       const protocol = 'https';
-      const hostPort = (inst.looker_port && String(inst.looker_port) !== '443')
-        ? `${inst.looker_host}:${inst.looker_port}`
+      const portStr = String(inst.looker_port || '443').trim();
+      const hostPort = (portStr && portStr !== '443' && portStr !== '19999')
+        ? `${inst.looker_host}:${portStr}`
         : inst.looker_host;
       const extensionUrl = `${protocol}://${hostPort}/extensions/nano_admin::admin_extension`;
       console.log(`  [Instance ${idx + 1}] ${inst.looker_host}`);
@@ -220,8 +221,9 @@ function printDeploymentSuccess(config, manifestContent, gcfUrl, isManifestUpToD
       console.log(`\n${stepNumber++}. In your Git repository or Looker project "nano_admin", create or update "manifest.lkml" with:`);
       instances.forEach((inst, idx) => {
         const protocol = 'https';
-        const hostPort = (inst.looker_port && String(inst.looker_port) !== '443')
-          ? `${inst.looker_host}:${inst.looker_port}`
+        const portStr = String(inst.looker_port || '443').trim();
+        const hostPort = (portStr && portStr !== '443' && portStr !== '19999')
+          ? `${inst.looker_host}:${portStr}`
           : inst.looker_host;
         const lookerIdeUrl = `${protocol}://${hostPort}/projects/nano_admin/files/manifest.lkml`;
         console.log(`   👉 [Instance ${idx + 1}] IDE URL: ${lookerIdeUrl}`);
@@ -238,14 +240,32 @@ function printDeploymentSuccess(config, manifestContent, gcfUrl, isManifestUpToD
     }
 
     if (!allModelFilesPass) {
-      console.log(`\n${stepNumber++}. Ensure a model file (such as "nano_admin.model.lkml" or "blank.model.lkml") exists in project "nano_admin".`);
+      console.log(`\n${stepNumber++}. In your Git repository or Looker project "nano_admin", ensure "nano_admin.model.lkml" exists with the configured database connection:`);
+      instances.forEach((inst, idx) => {
+        const res = projectResults[idx];
+        const expectedConn =
+          res?.files?.expectedConnection ||
+          inst.modelSelection?.selected_connection ||
+          inst.modelSelection?.allowed_connections?.[0] ||
+          inst.model_allowed_db_connection_names?.[0] ||
+          '<your_connection_name>';
+        const protocol = 'https';
+        const portStr = String(inst.looker_port || '443').trim();
+        const hostPort = (portStr && portStr !== '443' && portStr !== '19999')
+          ? `${inst.looker_host}:${portStr}`
+          : inst.looker_host;
+        const lookerIdeUrl = `${protocol}://${hostPort}/projects/nano_admin/files/nano_admin.model.lkml`;
+        console.log(`   👉 [Instance ${idx + 1}] IDE URL: ${lookerIdeUrl}`);
+        console.log(`      Expected content: connection: "${expectedConn}"`);
+      });
     }
 
     console.log(`\n${stepNumber++}. Open Looker, load the Nano Admin extension, and test functionality:`);
     instances.forEach((inst, idx) => {
       const protocol = 'https';
-      const hostPort = (inst.looker_port && String(inst.looker_port) !== '443')
-        ? `${inst.looker_host}:${inst.looker_port}`
+      const portStr = String(inst.looker_port || '443').trim();
+      const hostPort = (portStr && portStr !== '443' && portStr !== '19999')
+        ? `${inst.looker_host}:${portStr}`
         : inst.looker_host;
       const extensionUrl = `${protocol}://${hostPort}/extensions/nano_admin::admin_extension`;
       console.log(`   👉 [Instance ${idx + 1}] ${inst.looker_host}: ${extensionUrl}`);

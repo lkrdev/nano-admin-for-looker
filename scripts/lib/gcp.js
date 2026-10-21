@@ -290,7 +290,7 @@ async function deployGCF(config, lookerCreds) {
     --ingress-settings=${ingressSettings} \\
     --entry-point=nanoAdminBackend \\
     --source=backend \\
-    --set-env-vars="BUILD_HASH=${localBuildHash},LOOKER_ALLOWED_INSTANCES=${allowedInstances},LOOKER_INSTANCE_AUTH_MODES=${instanceAuthModesEnv}" \\
+    --set-env-vars="^|^BUILD_HASH=${localBuildHash}|LOOKER_ALLOWED_INSTANCES=${allowedInstances}|LOOKER_INSTANCE_AUTH_MODES=${instanceAuthModesEnv}" \\
     --set-secrets="${secretBindings.join(',')}"`;
 
   console.log(`Running deploy command:\n${deployCommand}\n`);
@@ -376,15 +376,24 @@ async function deployExtensionToGCS(config) {
     console.log(`Uploading extension assets (excluding .map files by default) to gs://${bucketName}...`);
   }
 
-  const gcloudIgnoreFlag = publishMaps ? '' : '--ignore-matches=".*\\.map$" ';
-  const gsutilExcludeFlag = publishMaps ? '' : '-x ".*\\.map$" ';
+  const distDir = path.join(__dirname, '..', '..', 'extension', 'dist');
+  const uploadFiles = fs.existsSync(distDir)
+    ? fs.readdirSync(distDir)
+        .filter(file => publishMaps || !file.endsWith('.map'))
+        .map(file => `"${path.join('extension', 'dist', file)}"`)
+    : ['"extension/dist/*"'];
+
+  if (uploadFiles.length === 0) {
+    console.error('❌ No extension assets found in extension/dist to upload.');
+    process.exit(1);
+  }
 
   try {
     try {
-      execSync(`gcloud storage cp -r ${gcloudIgnoreFlag}extension/dist/* gs://${bucketName}/ --project=${config.gcp_project_id}`, { stdio: 'inherit' });
+      execSync(`gcloud storage cp -r ${uploadFiles.join(' ')} gs://${bucketName}/ --project=${config.gcp_project_id}`, { stdio: 'inherit' });
     } catch (gcloudErr) {
       console.log('⚠️ gcloud storage upload failed. Trying fallback to gsutil...');
-      execSync(`gsutil cp -r ${gsutilExcludeFlag}extension/dist/* gs://${bucketName}/`, { stdio: 'inherit' });
+      execSync(`gsutil cp -r ${uploadFiles.join(' ')} gs://${bucketName}/`, { stdio: 'inherit' });
     }
     console.log(`✅ Successfully uploaded extension assets to GCS.`);
   } catch (uploadErr) {

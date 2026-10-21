@@ -67,25 +67,53 @@ async function runPostDeploymentVerification(config, gcfUrl) {
     if (!projectPass) allProjectsPass = false;
 
     let modelPass = false;
+    let foundModel = null;
     try {
       const modelsOutput = execSync(`looker-cli api lookmlmodel all_lookml_models ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' });
       const models = parseJsonFromStdout(modelsOutput);
-      modelPass = Array.isArray(models) && models.some(m => m.name === 'nano_admin' || m.project_name === 'nano_admin');
+      foundModel = Array.isArray(models) && models.find(m => m.name === 'nano_admin' || m.project_name === 'nano_admin');
+      modelPass = Boolean(foundModel);
     } catch (e) {}
     if (!modelPass) allModelsPass = false;
+
+    const expectedConnection =
+      inst.modelSelection?.selected_connection ||
+      inst.modelSelection?.allowed_connections?.[0] ||
+      inst.model_allowed_db_connection_names?.[0] ||
+      foundModel?.allowed_db_connection_names?.[0] ||
+      inst.projectState?.availableConnections?.[0] ||
+      '';
 
     let indexPass = false;
     let modelFilePass = false;
     let modelFileName = '';
+    let modelFileDetails = '';
     try {
       const filesOutput = execSync(`looker-cli api project all_project_files nano_admin ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' });
       const files = parseJsonFromStdout(filesOutput);
       if (Array.isArray(files)) {
         indexPass = files.some(f => f.id === 'index.md' || f.path === 'index.md');
-        const mFile = files.find(f => f.extension === '.lkml' && (f.type === 'model' || f.id?.endsWith('.model.lkml')));
+        const mFile =
+          files.find(f => f.id === 'nano_admin.model.lkml' || f.path === 'nano_admin.model.lkml') ||
+          files.find(f => f.extension === '.lkml' && (f.type === 'model' || f.id?.endsWith('.model.lkml')));
         if (mFile) {
-          modelFilePass = true;
           modelFileName = mFile.id || mFile.path;
+          let actualConnection = '';
+          try {
+            const modelContent = execSync(`looker-cli project file cat nano_admin ${modelFileName} ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+            const connMatch = modelContent.match(/connection:\s*"([^"]+)"/);
+            actualConnection = connMatch ? connMatch[1] : '';
+          } catch (e) {}
+
+          if (modelFileName === 'nano_admin.model.lkml' && expectedConnection && actualConnection === expectedConnection) {
+            modelFilePass = true;
+          } else if (modelFileName === 'nano_admin.model.lkml' && !expectedConnection && actualConnection && actualConnection !== 'default_bigquery_connection') {
+            modelFilePass = true;
+          } else if (expectedConnection) {
+            modelFileDetails = `(Found connection: "${actualConnection || 'none'}" in ${modelFileName}, expected: "${expectedConnection}" in nano_admin.model.lkml)`;
+          } else {
+            modelFileDetails = `(Found connection: "${actualConnection || 'none'}" in ${modelFileName})`;
+          }
         }
       }
     } catch (e) {}
@@ -96,8 +124,9 @@ async function runPostDeploymentVerification(config, gcfUrl) {
     let attrDetails = '';
     const isOAuthMode = inst.auth_mode === 'oauth';
     if (isOAuthMode) {
-      const hostPort = (inst.looker_port && String(inst.looker_port) !== '443')
-        ? `${inst.looker_host}:${inst.looker_port}`
+      const portStr = String(inst.looker_port || '443').trim();
+      const hostPort = (portStr && portStr !== '443' && portStr !== '19999')
+        ? `${inst.looker_host}:${portStr}`
         : inst.looker_host;
       const expectedRedirectUri = `https://${hostPort}/extensions/oauth2_redirect`;
       try {
@@ -183,7 +212,9 @@ async function runPostDeploymentVerification(config, gcfUrl) {
       manifestDetails,
       indexPass,
       modelFilePass,
-      modelFileName
+      modelFileName,
+      modelFileDetails,
+      expectedConnection
     });
   }
 
@@ -209,7 +240,8 @@ async function runPostDeploymentVerification(config, gcfUrl) {
       console.log(`      ⚠️ WARNING - Looker Production Manifest Entitlements [ACTION REQUIRED: Deploy extension manifest.lkml in project nano_admin. See details below.]`);
     }
     console.log(`      ${res.indexPass ? '✅ PASS' : '⚠️ WARNING'} - Project Workflows Configuration ('index.md') ${res.indexPass ? '' : '[ACTION REQUIRED: Add workflow definitions to index.md]'}`);
-    console.log(`      ${res.modelFilePass ? '✅ PASS' : '⚠️ WARNING'} - LookML Model File ${res.modelFilePass ? `('${res.modelFileName}')` : '[ACTION REQUIRED: Add a model file (e.g. nano_admin.model.lkml)]'}`);
+    const expectedConnHint = res.expectedConnection ? `connection: "${res.expectedConnection}"` : 'a valid connection name';
+    console.log(`      ${res.modelFilePass ? '✅ PASS' : '⚠️ WARNING'} - LookML Model File ${res.modelFilePass ? `('${res.modelFileName}'${res.expectedConnection ? `, connection: "${res.expectedConnection}"` : ''})` : `${res.modelFileDetails ? `${res.modelFileDetails} ` : ''}[ACTION REQUIRED: Ensure nano_admin.model.lkml specifies ${expectedConnHint}]`}`);
   });
   console.log('======================================================\n');
 
