@@ -221,18 +221,6 @@ function updateLocalConfigs(gcfUrl, publicUrl, instances = [], canonicalGcfUrl =
       /external_api_urls:\s*\[([\s\S]*?)\]/,
       `external_api_urls: [\n      ${externalApiUrlsList.join(',\n      ')}\n    ]\n    oauth2_urls: [\n      ${requiredOAuthUrls.join(',\n      ')}\n    ]`
     );
-
-    fs.writeFileSync(manifestPath, manifest, 'utf8');
-    console.log('✅ Updated extension/manifest.lkml on disk.');
-  }
-
-  const primaryConn = (instances || [])
-    .map(inst => inst.modelSelection?.selected_connection || inst.modelSelection?.allowed_connections?.[0] || inst.model_allowed_db_connection_names?.[0])
-    .find(Boolean);
-  const modelLkmlPath = path.join(__dirname, '..', '..', 'extension', 'nano_admin.model.lkml');
-  if (primaryConn && fs.existsSync(modelLkmlPath)) {
-    fs.writeFileSync(modelLkmlPath, `connection: "${primaryConn}"\n`, 'utf8');
-    console.log(`✅ Updated extension/nano_admin.model.lkml on disk with connection: "${primaryConn}".`);
   }
 
   console.log('\n📦 Compiling extension React bundle with environment variables...');
