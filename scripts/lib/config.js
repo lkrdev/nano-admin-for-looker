@@ -446,50 +446,81 @@ async function promptLookerServiceAccount(connectionConfig, gcpConfig, existingC
 }
 
 async function promptModelConfig(connectionConfig, projectState = {}, defaultFromPrevious = null) {
+  const available = projectState.availableConnections || [];
+  const prevConn = defaultFromPrevious?.selected_connection || defaultFromPrevious?.allowed_connections?.[0] || '';
+
   if (projectState.modelExists) {
+    const modelConns = projectState.model?.allowed_db_connection_names || [];
+    const fallbackConn = (prevConn && available.includes(prevConn)) ? prevConn : (available[0] || '');
     return {
       action: 'reuse',
       unlimited: projectState.model?.unlimited_db_connections !== false,
-      allowed_connections: projectState.model?.allowed_db_connection_names || []
+      allowed_connections: modelConns,
+      selected_connection: modelConns[0] || fallbackConn
     };
   }
 
   console.log(`\n📊 LookML Model Configuration for "nano_admin" on ${connectionConfig.looker_host}:`);
   console.log('LookML models require a database connection setting in Looker.');
 
-  const available = projectState.availableConnections || [];
-  console.log('  1 = Unlimited database connections (access to all database connections, recommended for admin extensions)');
+  console.log('  1 = Unlimited database connections');
   for (let i = 0; i < available.length; i++) {
     console.log(`  ${i + 2} = Specific connection: "${available[i]}"`);
   }
 
-  let defaultChoice = '1';
-  if (defaultFromPrevious && !defaultFromPrevious.unlimited && defaultFromPrevious.allowed_connections?.length > 0) {
-    const prevName = defaultFromPrevious.allowed_connections[0];
-    const foundIdx = available.indexOf(prevName);
+  let defaultChoice = available.length > 0 ? '2' : '1';
+  let defaultConnName = available.length > 0 ? available[0] : 'unlimited';
+
+  if (prevConn) {
+    const foundIdx = available.indexOf(prevConn);
     if (foundIdx !== -1) {
       defaultChoice = String(foundIdx + 2);
+      defaultConnName = prevConn;
     }
+  } else if (defaultFromPrevious && defaultFromPrevious.action === 'create' && defaultFromPrevious.unlimited) {
+    defaultChoice = '1';
+    defaultConnName = 'unlimited';
   }
 
-  const defaultHint = defaultFromPrevious
-    ? ` [default: ${defaultChoice} (${defaultFromPrevious.unlimited ? 'unlimited' : defaultFromPrevious.allowed_connections?.[0]})]`
+  const defaultHint = defaultConnName && defaultConnName !== 'unlimited'
+    ? ` [default: ${defaultChoice} (${defaultConnName})]`
     : ` [${defaultChoice}]`;
 
   const answer = await askQuestion(`Select option${defaultHint}: `);
   const choice = answer.trim() || defaultChoice;
 
   if (choice === '1') {
-    return { action: 'create', unlimited: true, allowed_connections: [] };
+    const fallbackConn = (prevConn && available.includes(prevConn)) ? prevConn : (available[0] || '');
+    return {
+      action: 'create',
+      unlimited: true,
+      allowed_connections: [],
+      selected_connection: fallbackConn
+    };
   }
 
   const num = parseInt(choice, 10);
   if (!isNaN(num) && num >= 2 && num <= available.length + 1) {
     const selectedConn = available[num - 2];
-    return { action: 'create', unlimited: false, allowed_connections: [selectedConn] };
+    return {
+      action: 'create',
+      unlimited: false,
+      allowed_connections: [selectedConn],
+      selected_connection: selectedConn
+    };
   }
 
-  return { action: 'create', unlimited: true, allowed_connections: [] };
+  if (available.length > 0) {
+    const fallbackConn = (prevConn && available.includes(prevConn)) ? prevConn : available[0];
+    return {
+      action: 'create',
+      unlimited: false,
+      allowed_connections: [fallbackConn],
+      selected_connection: fallbackConn
+    };
+  }
+
+  return { action: 'create', unlimited: true, allowed_connections: [], selected_connection: '' };
 }
 
 async function promptGitConfig(connectionConfig, projectState = {}, existingSavedConfig = {}, defaultFromPrevious = null) {

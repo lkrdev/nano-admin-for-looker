@@ -131,12 +131,15 @@ async function runFullDeploymentPipeline() {
     const conn = targetConnections[i];
     const projectState = projectStates[i];
     const existingInst = (config.instances || []).find(inst => inst.looker_host === conn.looker_host) || {};
-    const defaultFromPrevious = i > 0 ? modelConfigs[0] : null;
+    const defaultFromPrevious = i > 0
+      ? (modelConfigs.find(m => m && (m.selected_connection || m.allowed_connections?.length > 0)) || modelConfigs[0])
+      : null;
     const modelCfg = skipPrompts
       ? {
           action: projectState.modelExists ? 'reuse' : 'create',
           unlimited: existingInst.model_unlimited_db_connections !== false,
-          allowed_connections: existingInst.model_allowed_db_connection_names || []
+          allowed_connections: existingInst.model_allowed_db_connection_names || [],
+          selected_connection: (existingInst.model_allowed_db_connection_names || [])[0] || projectState.model?.allowed_db_connection_names?.[0] || projectState.availableConnections?.[0] || ''
         }
       : await promptModelConfig(conn, projectState, defaultFromPrevious);
     modelConfigs.push(modelCfg);

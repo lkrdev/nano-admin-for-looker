@@ -226,6 +226,15 @@ function updateLocalConfigs(gcfUrl, publicUrl, instances = [], canonicalGcfUrl =
     console.log('✅ Updated extension/manifest.lkml on disk.');
   }
 
+  const primaryConn = (instances || [])
+    .map(inst => inst.modelSelection?.selected_connection || inst.modelSelection?.allowed_connections?.[0] || inst.model_allowed_db_connection_names?.[0])
+    .find(Boolean);
+  const modelLkmlPath = path.join(__dirname, '..', '..', 'extension', 'nano_admin.model.lkml');
+  if (primaryConn && fs.existsSync(modelLkmlPath)) {
+    fs.writeFileSync(modelLkmlPath, `connection: "${primaryConn}"\n`, 'utf8');
+    console.log(`✅ Updated extension/nano_admin.model.lkml on disk with connection: "${primaryConn}".`);
+  }
+
   console.log('\n📦 Compiling extension React bundle with environment variables...');
   console.log(`👉 BACKEND_URL=${gcfUrl}`);
   console.log(`👉 INSTANCE_AUTH_MODES=${instanceAuthModesJson}`);
@@ -246,8 +255,9 @@ function updateLocalConfigs(gcfUrl, publicUrl, instances = [], canonicalGcfUrl =
 
 async function configureLookerOAuthClient(config) {
   const clientGuid = 'nano_admin_oauth_client';
-  const hostPort = (config.looker_port && String(config.looker_port) !== '443')
-    ? `${config.looker_host}:${config.looker_port}`
+  const portStr = String(config.looker_port || '443').trim();
+  const hostPort = (portStr && portStr !== '443' && portStr !== '19999')
+    ? `${config.looker_host}:${portStr}`
     : config.looker_host;
   const redirectUri = `https://${hostPort}/extensions/oauth2_redirect`;
 
@@ -617,6 +627,13 @@ async function configureLookerProjectGit(connectionConfig, projectName = 'nano_a
 
 async function inspectLookerProjectFiles(connectionConfig, projectName = 'nano_admin') {
   console.log(`\n📄 Inspecting project files in "${projectName}" on ${connectionConfig.looker_host}...`);
+  const expectedConnection =
+    connectionConfig.modelSelection?.selected_connection ||
+    connectionConfig.modelSelection?.allowed_connections?.[0] ||
+    connectionConfig.model_allowed_db_connection_names?.[0] ||
+    connectionConfig.projectState?.model?.allowed_db_connection_names?.[0] ||
+    connectionConfig.projectState?.availableConnections?.[0] ||
+    '';
   try {
     const filesOut = execSync(`looker-cli api project all_project_files ${projectName} ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     const files = parseJsonFromStdout(filesOut);
@@ -624,8 +641,24 @@ async function inspectLookerProjectFiles(connectionConfig, projectName = 'nano_a
 
     const hasManifest = fileList.some(f => f.id === 'manifest.lkml' || f.path === 'manifest.lkml');
     const hasIndexMd = fileList.some(f => f.id === 'index.md' || f.path === 'index.md');
-    const modelFile = fileList.find(f => (f.extension === '.lkml' && (f.type === 'model' || f.id?.endsWith('.model.lkml'))));
+    const modelFile =
+      fileList.find(f => f.id === 'nano_admin.model.lkml' || f.path === 'nano_admin.model.lkml') ||
+      fileList.find(f => (f.extension === '.lkml' && (f.type === 'model' || f.id?.endsWith('.model.lkml'))));
     const hasModelFile = Boolean(modelFile);
+    const modelFileName = modelFile ? (modelFile.id || modelFile.path) : null;
+
+    let actualConnection = '';
+    let modelFilePass = false;
+    if (hasModelFile && modelFileName === 'nano_admin.model.lkml') {
+      try {
+        const modelContent = execSync(`looker-cli project file cat ${projectName} ${modelFileName} ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+        const connMatch = modelContent.match(/connection:\s*"([^"]+)"/);
+        actualConnection = connMatch ? connMatch[1] : '';
+      } catch (e) {}
+      modelFilePass = expectedConnection
+        ? actualConnection === expectedConnection
+        : Boolean(actualConnection && actualConnection !== 'default_bigquery_connection');
+    }
 
     const foundNames = fileList.map(f => f.id || f.path);
     console.log(`✅ Found ${fileList.length} files in project "${projectName}": [${foundNames.join(', ')}]`);
@@ -634,7 +667,10 @@ async function inspectLookerProjectFiles(connectionConfig, projectName = 'nano_a
       hasManifest,
       hasIndexMd,
       hasModelFile,
-      modelFileName: modelFile ? (modelFile.id || modelFile.path) : null,
+      modelFilePass,
+      modelFileName,
+      actualConnection,
+      expectedConnection,
       files: foundNames
     };
   } catch (err) {
@@ -643,7 +679,10 @@ async function inspectLookerProjectFiles(connectionConfig, projectName = 'nano_a
       hasManifest: false,
       hasIndexMd: false,
       hasModelFile: false,
+      modelFilePass: false,
       modelFileName: null,
+      actualConnection: '',
+      expectedConnection,
       files: [],
       error: err.message
     };
