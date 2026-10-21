@@ -1,12 +1,12 @@
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
-const { parseJsonFromStdout } = require('./prereqs');
+const { parseJsonFromStdout, buildLookerCliFlags } = require('./prereqs');
 
 async function getLookerSaById(connectionConfig, saId) {
   if (!saId) return null;
   try {
-    const out = execSync(`looker-cli api user search_users --id="${saId}" --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const out = execSync(`looker-cli api user search_users --id="${saId}" ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     const users = JSON.parse(out);
     if (users && users.length > 0) return users[0];
   } catch (e) {}
@@ -15,7 +15,7 @@ async function getLookerSaById(connectionConfig, saId) {
 
 async function checkUserAdminPermission(connectionConfig, userId) {
   try {
-    const rolesOutput = execSync(`looker-cli api user user_roles ${userId} --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const rolesOutput = execSync(`looker-cli api user user_roles ${userId} ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     const roles = parseJsonFromStdout(rolesOutput);
     
     const rolesList = Array.isArray(roles) ? roles : [roles];
@@ -36,7 +36,7 @@ async function checkUserAdminPermission(connectionConfig, userId) {
 
 async function getAdminRoleId(connectionConfig) {
   try {
-    const rolesOutput = execSync(`looker-cli api role all_roles --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const rolesOutput = execSync(`looker-cli api role all_roles ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     const roles = parseJsonFromStdout(rolesOutput);
     const rolesList = Array.isArray(roles) ? roles : [];
 
@@ -66,7 +66,7 @@ async function assignAdminRoleToUser(connectionConfig, userId) {
   try {
     console.log(`Assigning Administrator role (ID: ${adminRoleId}) to service account ID ${userId}...`);
     const payload = JSON.stringify([parseInt(adminRoleId, 10)]);
-    execSync(`echo '${payload}' | looker-cli api user set_user_roles ${userId} - --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    execSync(`echo '${payload}' | looker-cli api user set_user_roles ${userId} - ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     console.log(`✅ Successfully assigned Administrator role to service account ID ${userId}.`);
     return true;
   } catch (err) {
@@ -123,7 +123,7 @@ async function getLookerCredentials(connectionConfig, saConfig) {
       console.log(`Creating new Looker service account: "${saName}"...`);
       try {
         const payload = JSON.stringify({ service_account_name: saName });
-        const createOutput = execSync(`echo '${payload}' | looker-cli api user create_service_account - --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+        const createOutput = execSync(`echo '${payload}' | looker-cli api user create_service_account - ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
         const newSa = parseJsonFromStdout(createOutput);
         targetSaId = newSa.id;
         console.log(`✅ Successfully created Looker service account ID: ${targetSaId}`);
@@ -136,7 +136,7 @@ async function getLookerCredentials(connectionConfig, saConfig) {
 
     console.log(`Generating API credentials for Looker service account ID ${targetSaId}...`);
     try {
-      const credsOutput = execSync(`looker-cli api user create_user_credentials_api3 ${targetSaId} --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+      const credsOutput = execSync(`looker-cli api user create_user_credentials_api3 ${targetSaId} ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
       const creds = parseJsonFromStdout(credsOutput);
       clientId = creds.client_id;
       clientSecret = creds.client_secret;
@@ -261,7 +261,7 @@ async function configureLookerOAuthClient(config) {
   });
 
   try {
-    const existingOutput = execSync(`looker-cli api auth oauth_client_app ${clientGuid} --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const existingOutput = execSync(`looker-cli api auth oauth_client_app ${clientGuid} ${buildLookerCliFlags(config)}`, { encoding: 'utf8', stdio: 'pipe' });
     const existingApp = parseJsonFromStdout(existingOutput);
     if (existingApp && existingApp.client_guid === clientGuid) {
       if (existingApp.enabled && existingApp.redirect_uri === redirectUri) {
@@ -269,7 +269,7 @@ async function configureLookerOAuthClient(config) {
         return;
       }
       console.log(`Updating existing Looker OAuth client "${clientGuid}" on ${config.looker_host}...`);
-      execSync(`echo '${payload}' | looker-cli api auth update_oauth_client_app ${clientGuid} - --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`, { stdio: 'pipe' });
+      execSync(`echo '${payload}' | looker-cli api auth update_oauth_client_app ${clientGuid} - ${buildLookerCliFlags(config)}`, { stdio: 'pipe' });
       console.log(`✅ Successfully updated Looker OAuth client "${clientGuid}" on ${config.looker_host}.`);
       return;
     }
@@ -277,7 +277,7 @@ async function configureLookerOAuthClient(config) {
 
   try {
     console.log(`Registering Looker OAuth client "${clientGuid}" on ${config.looker_host} (redirect_uri: ${redirectUri})...`);
-    execSync(`echo '${payload}' | looker-cli api auth register_oauth_client_app ${clientGuid} - --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`, { stdio: 'pipe' });
+    execSync(`echo '${payload}' | looker-cli api auth register_oauth_client_app ${clientGuid} - ${buildLookerCliFlags(config)}`, { stdio: 'pipe' });
     console.log(`✅ Successfully registered Looker OAuth client "${clientGuid}" on ${config.looker_host}.`);
   } catch (e) {
     console.warn(`⚠️  Warning: Failed to register Looker OAuth client "${clientGuid}" on ${config.looker_host}: ${e.message}`);
@@ -306,7 +306,7 @@ async function configureLookerAttribute(config, gcfUrl) {
 
   // Pre-check if attribute already exists and has the required allowlist
   try {
-    const attrOutput = execSync(`looker-cli api userattribute all_user_attributes --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const attrOutput = execSync(`looker-cli api userattribute all_user_attributes ${buildLookerCliFlags(config)}`, { encoding: 'utf8', stdio: 'pipe' });
     const attributes = parseJsonFromStdout(attrOutput);
     const existingAttr = Array.isArray(attributes) && attributes.find(a => a.name === attrName);
     if (existingAttr) {
@@ -322,7 +322,7 @@ async function configureLookerAttribute(config, gcfUrl) {
 
       console.log(`Resetting user attribute "${attrName}" on ${config.looker_host} to update domain allowlist to ${domainOrigin}...`);
       try {
-        execSync(`looker-cli api userattribute delete_user_attribute ${existingAttr.id} --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`, { stdio: 'pipe' });
+        execSync(`looker-cli api userattribute delete_user_attribute ${existingAttr.id} ${buildLookerCliFlags(config)}`, { stdio: 'pipe' });
         console.log(`✅ Removed stale user attribute (${existingAttr.id}) to allow domain allowlist update.`);
       } catch (delErr) {
         console.warn(`⚠️ Warning: Could not delete existing user attribute: ${delErr.message}`);
@@ -333,7 +333,7 @@ async function configureLookerAttribute(config, gcfUrl) {
   console.log(`Creating user attribute "${attrName}" on ${config.looker_host} with domain whitelist: ${domainOrigin}`);
 
   try {
-    const cmd = `looker-cli attribute create ${attrName} "Nano Admin Challenge" --is-hidden --type=string --domain-allowlist="${domainOrigin}" --default-value="init_challenge" --host=${config.looker_host} --port=${config.looker_port} --ssl=${config.looker_ssl}`;
+    const cmd = `looker-cli attribute create ${attrName} "Nano Admin Challenge" --is-hidden --type=string --domain-allowlist="${domainOrigin}" --default-value="init_challenge" ${buildLookerCliFlags(config)}`;
     execSync(cmd, { stdio: 'pipe' });
     console.log(`✅ Successfully configured Looker user attribute on ${config.looker_host}.`);
   } catch (e) {
@@ -344,7 +344,7 @@ async function configureLookerAttribute(config, gcfUrl) {
 function setDevWorkspace(connectionConfig) {
   try {
     const wsPayload = JSON.stringify({ workspace_id: 'dev' });
-    execSync(`echo '${wsPayload}' | looker-cli api session update_session - --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { stdio: 'pipe' });
+    execSync(`echo '${wsPayload}' | looker-cli api session update_session - ${buildLookerCliFlags(connectionConfig)}`, { stdio: 'pipe' });
     return true;
   } catch (e) {
     return false;
@@ -361,7 +361,7 @@ async function discoverLookerProjectState(connectionConfig, projectName = 'nano_
   let deployKey = null;
 
   try {
-    const projOutput = execSync(`looker-cli api project all_projects --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const projOutput = execSync(`looker-cli api project all_projects ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     const projects = parseJsonFromStdout(projOutput);
     if (Array.isArray(projects)) {
       foundProject = projects.find(p => p.id === projectName || p.name === projectName);
@@ -388,7 +388,7 @@ async function discoverLookerProjectState(connectionConfig, projectName = 'nano_
 
   if (projectExists && (gitType === 'private' || gitType === 'bare')) {
     try {
-      const keyOutput = execSync(`looker-cli api project git_deploy_key ${projectName} --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+      const keyOutput = execSync(`looker-cli api project git_deploy_key ${projectName} ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
       if (keyOutput && keyOutput.startsWith('ssh-')) {
         deployKey = keyOutput;
       }
@@ -398,7 +398,7 @@ async function discoverLookerProjectState(connectionConfig, projectName = 'nano_
   let modelExists = false;
   let foundModel = null;
   try {
-    const modelsOutput = execSync(`looker-cli api lookmlmodel all_lookml_models --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const modelsOutput = execSync(`looker-cli api lookmlmodel all_lookml_models ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     const models = parseJsonFromStdout(modelsOutput);
     if (Array.isArray(models)) {
       foundModel = models.find(m => m.name === modelName);
@@ -410,7 +410,7 @@ async function discoverLookerProjectState(connectionConfig, projectName = 'nano_
 
   let availableConnections = [];
   try {
-    const connOutput = execSync(`looker-cli api connection all_connections --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const connOutput = execSync(`looker-cli api connection all_connections ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     const conns = parseJsonFromStdout(connOutput);
     if (Array.isArray(conns)) {
       availableConnections = conns.map(c => c.name).filter(Boolean);
@@ -438,7 +438,7 @@ async function ensureLookerProject(connectionConfig, projectName = 'nano_admin',
 
   console.log(`\n📁 Checking Looker project "${projectName}" on ${connectionConfig.looker_host}...`);
   try {
-    const output = execSync(`looker-cli api project all_projects --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const output = execSync(`looker-cli api project all_projects ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     const projects = parseJsonFromStdout(output);
     const existing = Array.isArray(projects) && projects.find(p => p.id === projectName || p.name === projectName);
     if (existing) {
@@ -454,7 +454,7 @@ async function ensureLookerProject(connectionConfig, projectName = 'nano_admin',
 
   try {
     const createPayload = JSON.stringify({ name: projectName });
-    const createOut = execSync(`echo '${createPayload}' | looker-cli api project create_project - --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const createOut = execSync(`echo '${createPayload}' | looker-cli api project create_project - ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     const created = parseJsonFromStdout(createOut);
     console.log(`✅ Successfully created Looker project "${projectName}".`);
     return { project: created, created: true };
@@ -472,7 +472,7 @@ async function ensureLookerModel(connectionConfig, modelName = 'nano_admin', pro
 
   console.log(`\n📊 Checking Looker model configuration "${modelName}" on ${connectionConfig.looker_host}...`);
   try {
-    const output = execSync(`looker-cli api lookmlmodel all_lookml_models --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const output = execSync(`looker-cli api lookmlmodel all_lookml_models ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     const models = parseJsonFromStdout(output);
     const existing = Array.isArray(models) && models.find(m => m.name === modelName);
     if (existing) {
@@ -492,7 +492,7 @@ async function ensureLookerModel(connectionConfig, modelName = 'nano_admin', pro
       unlimited_db_connections: Boolean(modelSelection.unlimited),
       allowed_db_connection_names: modelSelection.allowed_connections || []
     });
-    const createOut = execSync(`echo '${payload}' | looker-cli api lookmlmodel create_lookml_model - --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const createOut = execSync(`echo '${payload}' | looker-cli api lookmlmodel create_lookml_model - ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     const created = parseJsonFromStdout(createOut);
     console.log(`✅ Successfully created Looker model configuration "${modelName}".`);
     return { model: created, created: true };
@@ -511,7 +511,7 @@ async function configureLookerProjectGit(connectionConfig, projectName = 'nano_a
     let deployKey = gitConfig.deploy_key || null;
     if (!deployKey && (gitType === 'private' || gitType === 'bare')) {
       try {
-        const keyOutput = execSync(`looker-cli api project git_deploy_key ${projectName} --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+        const keyOutput = execSync(`looker-cli api project git_deploy_key ${projectName} ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
         if (keyOutput && keyOutput.startsWith('ssh-')) {
           deployKey = keyOutput;
         }
@@ -530,7 +530,7 @@ async function configureLookerProjectGit(connectionConfig, projectName = 'nano_a
 
   let project = null;
   try {
-    const projOut = execSync(`looker-cli api project project ${projectName} --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const projOut = execSync(`looker-cli api project project ${projectName} ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     project = parseJsonFromStdout(projOut);
   } catch (e) {}
 
@@ -546,7 +546,7 @@ async function configureLookerProjectGit(connectionConfig, projectName = 'nano_a
 
     try {
       const payload = JSON.stringify({ git_service_name: 'bare' });
-      execSync(`echo '${payload}' | looker-cli api project update_project ${projectName} - --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { stdio: 'pipe' });
+      execSync(`echo '${payload}' | looker-cli api project update_project ${projectName} - ${buildLookerCliFlags(connectionConfig)}`, { stdio: 'pipe' });
       console.log(`✅ Configured bare repository for project "${projectName}".`);
       return { git_type: 'bare', status: 'configured', deploy_key: null };
     } catch (err) {
@@ -558,10 +558,10 @@ async function configureLookerProjectGit(connectionConfig, projectName = 'nano_a
   if (gitType === 'private') {
     let deployKey = '';
     try {
-      deployKey = execSync(`looker-cli api project git_deploy_key ${projectName} --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+      deployKey = execSync(`looker-cli api project git_deploy_key ${projectName} ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
     } catch (e) {
       try {
-        deployKey = execSync(`looker-cli api project create_git_deploy_key ${projectName} --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+        deployKey = execSync(`looker-cli api project create_git_deploy_key ${projectName} ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
       } catch (createErr) {
         console.warn(`⚠️ Warning: Could not generate deploy key for project "${projectName}": ${createErr.message}`);
       }
@@ -575,7 +575,7 @@ async function configureLookerProjectGit(connectionConfig, projectName = 'nano_a
     if (remoteUrl) {
       try {
         const payload = JSON.stringify({ git_remote_url: remoteUrl });
-        execSync(`echo '${payload}' | looker-cli api project update_project ${projectName} - --timeout=15 --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { stdio: 'pipe' });
+        execSync(`echo '${payload}' | looker-cli api project update_project ${projectName} - --timeout=15 ${buildLookerCliFlags(connectionConfig)}`, { stdio: 'pipe' });
         console.log(`✅ Successfully connected project "${projectName}" to remote Git repository: ${remoteUrl}`);
         status = 'configured';
       } catch (updateErr) {
@@ -597,7 +597,7 @@ async function configureLookerProjectGit(connectionConfig, projectName = 'nano_a
     if (remoteUrl) {
       try {
         const payload = JSON.stringify({ git_remote_url: remoteUrl });
-        execSync(`echo '${payload}' | looker-cli api project update_project ${projectName} - --timeout=15 --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { stdio: 'pipe' });
+        execSync(`echo '${payload}' | looker-cli api project update_project ${projectName} - --timeout=15 ${buildLookerCliFlags(connectionConfig)}`, { stdio: 'pipe' });
         console.log(`✅ Successfully connected project "${projectName}" to public Git repository: ${remoteUrl}`);
       } catch (updateErr) {
         console.warn(`⚠️ Warning: Could not connect to public Git repository "${remoteUrl}": ${updateErr.message}`);
@@ -618,7 +618,7 @@ async function configureLookerProjectGit(connectionConfig, projectName = 'nano_a
 async function inspectLookerProjectFiles(connectionConfig, projectName = 'nano_admin') {
   console.log(`\n📄 Inspecting project files in "${projectName}" on ${connectionConfig.looker_host}...`);
   try {
-    const filesOut = execSync(`looker-cli api project all_project_files ${projectName} --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const filesOut = execSync(`looker-cli api project all_project_files ${projectName} ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     const files = parseJsonFromStdout(filesOut);
     const fileList = Array.isArray(files) ? files : [];
 

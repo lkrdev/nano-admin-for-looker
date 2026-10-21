@@ -131,24 +131,104 @@ async function checkPrerequisites() {
   await checkGCPAuth();
 }
 
+let cachedCliProfiles = null;
+
+function getLookerCliProfiles(forceRefresh = false) {
+  if (cachedCliProfiles && !forceRefresh) {
+    return cachedCliProfiles;
+  }
+  const profiles = [];
+  try {
+    const output = execSync('looker-cli profile ls', { encoding: 'utf8', stdio: 'pipe' });
+    const lines = output.split('\n');
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+      const isDefault = trimmed.startsWith('*');
+      const cleanLine = trimmed.replace(/^\*\s*/, '');
+      const match = cleanLine.match(/^([^\s]+)\s+\(([^:]+)(?::(\d+))?\)/);
+      if (match) {
+        const name = match[1];
+        const host = match[2];
+        const port = match[3] || '443';
+        const ssl = true;
+        profiles.push({ name, host, port, ssl, isDefault });
+      }
+    }
+  } catch (e) {}
+  profiles.sort((a, b) => a.name.localeCompare(b.name));
+  cachedCliProfiles = profiles;
+  return profiles;
+}
+
+function deriveProfileNameFromHost(host, existingProfiles = []) {
+  const cleanHost = String(host || '').trim().toLowerCase();
+  if (!cleanHost) return 'default';
+  const shortName = cleanHost.split('.')[0].replace(/[^a-z0-9_-]/g, '-') || 'looker';
+  const conflict = existingProfiles.some(p => p.name.toLowerCase() === shortName && p.host.toLowerCase() !== cleanHost);
+  if (!conflict) {
+    return shortName;
+  }
+  return cleanHost.replace(/[^a-z0-9_-]/g, '-');
+}
+
+function resolveLookerProfileName(connectionConfig = {}) {
+  const targetHost = String(connectionConfig.looker_host || '').trim().toLowerCase();
+  const profiles = getLookerCliProfiles();
+
+  if (connectionConfig.looker_profile) {
+    const byName = profiles.find(p => p.name === connectionConfig.looker_profile);
+    if (byName) return byName.name;
+  }
+
+  if (!targetHost) return connectionConfig.looker_profile || '';
+
+  const matchedByHost = profiles.find(p => p.host.toLowerCase() === targetHost);
+  if (matchedByHost) {
+    return matchedByHost.name;
+  }
+
+  const newProfileName = connectionConfig.looker_profile || deriveProfileNameFromHost(targetHost, profiles);
+  const port = String(connectionConfig.looker_port || '443').trim();
+  try {
+    execSync(`looker-cli profile add ${newProfileName} --host=${targetHost} --port=${port}`, { stdio: 'pipe' });
+    getLookerCliProfiles(true);
+    return newProfileName;
+  } catch (e) {
+    return '';
+  }
+}
+
+function buildLookerCliFlags(connectionConfig = {}) {
+  const profileName = resolveLookerProfileName(connectionConfig);
+  const profilePart = profileName ? `--profile=${profileName} ` : '';
+  return `${profilePart}--host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`;
+}
+
 async function ensureLookerLoggedIn(connectionConfig) {
-  console.log(`\n🔑 Checking Looker session status for host ${connectionConfig.looker_host}...`);
+  const profileName = resolveLookerProfileName(connectionConfig);
+  const cliFlags = buildLookerCliFlags(connectionConfig);
+  console.log(`\n🔑 Checking Looker session status for host ${connectionConfig.looker_host}${profileName ? ` (profile: ${profileName})` : ''}...`);
   let loggedIn = false;
   let lookerUser = 'Unknown User';
 
   try {
-    const userMeOutput = execSync(`looker-cli api user me --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const userMeOutput = execSync(`looker-cli api user me ${cliFlags}`, { encoding: 'utf8', stdio: 'pipe' });
     const userMe = parseJsonFromStdout(userMeOutput);
     lookerUser = `${userMe.display_name || userMe.first_name + ' ' + userMe.last_name} (${userMe.email})`;
     loggedIn = true;
   } catch (e) {
     console.log(`Not authenticated with Looker host ${connectionConfig.looker_host}. Initiating login via OAuth PKCE...`);
-    const loginArgs = ['session', 'login', '--oauth', `--host=${connectionConfig.looker_host}`, `--port=${connectionConfig.looker_port}`, `--ssl=${connectionConfig.looker_ssl}`];
+    const loginArgs = ['session', 'login', '--oauth'];
+    if (profileName) {
+      loginArgs.push(`--profile=${profileName}`);
+    }
+    loginArgs.push(`--host=${connectionConfig.looker_host}`, `--port=${connectionConfig.looker_port}`, `--ssl=${connectionConfig.looker_ssl}`);
     
     await runCommandFiltered('looker-cli', loginArgs);
 
     try {
-      const userMeOutput = execSync(`looker-cli api user me --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+      const userMeOutput = execSync(`looker-cli api user me ${cliFlags}`, { encoding: 'utf8', stdio: 'pipe' });
       const userMe = parseJsonFromStdout(userMeOutput);
       lookerUser = `${userMe.display_name || userMe.first_name + ' ' + userMe.last_name} (${userMe.email})`;
       loggedIn = true;
@@ -172,5 +252,8 @@ module.exports = {
   validateLocalTooling,
   checkGCPAuth,
   checkPrerequisites,
+  getLookerCliProfiles,
+  resolveLookerProfileName,
+  buildLookerCliFlags,
   ensureLookerLoggedIn
 };

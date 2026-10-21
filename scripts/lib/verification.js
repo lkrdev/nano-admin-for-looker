@@ -1,7 +1,7 @@
 const https = require('https');
 const { execSync } = require('child_process');
 const { loadLocalBuildHash } = require('./gcp');
-const { parseJsonFromStdout } = require('./prereqs');
+const { parseJsonFromStdout, buildLookerCliFlags } = require('./prereqs');
 
 function fetchUrlContent(url) {
   return new Promise((resolve, reject) => {
@@ -60,7 +60,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
   for (const inst of instances) {
     let projectPass = false;
     try {
-      const projOutput = execSync(`looker-cli api project project nano_admin --host=${inst.looker_host} --port=${inst.looker_port} --ssl=${inst.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+      const projOutput = execSync(`looker-cli api project project nano_admin ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' });
       const proj = parseJsonFromStdout(projOutput);
       projectPass = Boolean(proj && (proj.id === 'nano_admin' || proj.name === 'nano_admin'));
     } catch (e) {}
@@ -68,7 +68,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
 
     let modelPass = false;
     try {
-      const modelsOutput = execSync(`looker-cli api lookmlmodel all_lookml_models --host=${inst.looker_host} --port=${inst.looker_port} --ssl=${inst.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+      const modelsOutput = execSync(`looker-cli api lookmlmodel all_lookml_models ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' });
       const models = parseJsonFromStdout(modelsOutput);
       modelPass = Array.isArray(models) && models.some(m => m.name === 'nano_admin' || m.project_name === 'nano_admin');
     } catch (e) {}
@@ -78,7 +78,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
     let modelFilePass = false;
     let modelFileName = '';
     try {
-      const filesOutput = execSync(`looker-cli api project all_project_files nano_admin --host=${inst.looker_host} --port=${inst.looker_port} --ssl=${inst.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+      const filesOutput = execSync(`looker-cli api project all_project_files nano_admin ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' });
       const files = parseJsonFromStdout(filesOutput);
       if (Array.isArray(files)) {
         indexPass = files.some(f => f.id === 'index.md' || f.path === 'index.md');
@@ -101,7 +101,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
         : inst.looker_host;
       const expectedRedirectUri = `https://${hostPort}/extensions/oauth2_redirect`;
       try {
-        const oauthOutput = execSync(`looker-cli api auth oauth_client_app nano_admin_oauth_client --host=${inst.looker_host} --port=${inst.looker_port} --ssl=${inst.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+        const oauthOutput = execSync(`looker-cli api auth oauth_client_app nano_admin_oauth_client ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' });
         const oauthApp = parseJsonFromStdout(oauthOutput);
         if (oauthApp && oauthApp.client_guid === 'nano_admin_oauth_client') {
           if (oauthApp.enabled && oauthApp.redirect_uri === expectedRedirectUri) {
@@ -117,7 +117,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
       }
     } else {
       try {
-        const attrOutput = execSync(`looker-cli api userattribute all_user_attributes --host=${inst.looker_host} --port=${inst.looker_port} --ssl=${inst.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+        const attrOutput = execSync(`looker-cli api userattribute all_user_attributes ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' });
         const attributes = parseJsonFromStdout(attrOutput);
         const attr = Array.isArray(attributes) && attributes.find(a => a.name === 'nano_admin_admin_extension_nano_admin_challenge');
         if (attr) {
@@ -149,7 +149,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
     let manifestDetails = '';
     try {
       const gcsBundleUrl = `https://storage.googleapis.com/${config.gcs_bucket_name}/bundle.js`;
-      const prodManifestContent = execSync(`looker-cli project file cat nano_admin manifest.lkml --host=${inst.looker_host} --port=${inst.looker_port} --ssl=${inst.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+      const prodManifestContent = execSync(`looker-cli project file cat nano_admin manifest.lkml ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
       if (prodManifestContent) {
         const gcfUrlOrigin = gcfUrl ? gcfUrl.replace(/\/+$/, '') : '';
         const hasGcf = !gcfUrl || prodManifestContent.includes(gcfUrl);

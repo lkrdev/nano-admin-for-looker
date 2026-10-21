@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const { askQuestion } = require('./ui');
+const { getLookerCliProfiles, resolveLookerProfileName, buildLookerCliFlags } = require('./prereqs');
 
 function loadEnvFile() {
   const rootDir = path.join(__dirname, '..', '..');
@@ -76,16 +77,20 @@ function loadConfig(configPath) {
 }
 
 function saveConfig(configPath, config) {
-  const safeInstances = (config.instances || []).map(inst => ({
-    looker_host: inst.looker_host,
-    looker_port: inst.looker_port || '443',
-    looker_ssl: inst.looker_ssl !== undefined ? inst.looker_ssl : true,
-    auth_mode: inst.auth_mode === 'oauth' ? 'oauth' : 'server_proxy',
-    git_type: inst.git_type || 'bare',
-    git_remote_url: inst.git_remote_url || '',
-    model_unlimited_db_connections: inst.model_unlimited_db_connections !== false,
-    model_allowed_db_connection_names: inst.model_allowed_db_connection_names || []
-  }));
+  const safeInstances = (config.instances || []).map(inst => {
+    const resolvedProfile = resolveLookerProfileName(inst);
+    return {
+      looker_host: inst.looker_host,
+      looker_port: inst.looker_port || '443',
+      looker_ssl: inst.looker_ssl !== undefined ? inst.looker_ssl : true,
+      ...(resolvedProfile ? { looker_profile: resolvedProfile } : {}),
+      auth_mode: inst.auth_mode === 'oauth' ? 'oauth' : 'server_proxy',
+      git_type: inst.git_type || 'bare',
+      git_remote_url: inst.git_remote_url || '',
+      model_unlimited_db_connections: inst.model_unlimited_db_connections !== false,
+      model_allowed_db_connection_names: inst.model_allowed_db_connection_names || []
+    };
+  });
 
   const safeConfig = {
     gcp_project_id: config.gcp_project_id,
@@ -189,30 +194,6 @@ function getSavedGitConfig(config) {
   }));
 }
 
-function getLookerCliProfiles() {
-  const profiles = [];
-  try {
-    const output = execSync('looker-cli profile ls', { encoding: 'utf8', stdio: 'pipe' });
-    const lines = output.split('\n');
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      const isDefault = trimmed.startsWith('*');
-      const cleanLine = trimmed.replace(/^\*\s*/, '');
-      const match = cleanLine.match(/^([^\s]+)\s+\(([^:]+)(?::(\d+))?\)/);
-      if (match) {
-        const name = match[1];
-        const host = match[2];
-        const port = match[3] || '443';
-        const ssl = true;
-        profiles.push({ name, host, port, ssl, isDefault });
-      }
-      if (profiles.length >= 10) break;
-    }
-  } catch (e) {}
-  return profiles;
-}
-
 async function promptInstanceAuthMode(host, existingAuthMode = 'server_proxy') {
   console.log(`\n🔒 Authentication Mode for ${host}:`);
   console.log('  1 = Server Proxy (User attribute HMAC challenge)');
@@ -241,7 +222,21 @@ async function promptLookerConnection(existingInstance = {}) {
     });
     console.log(`  ${profiles.length + 1} = Enter a custom Looker host manually`);
 
-    const defaultChoice = '1';
+    let defaultChoice = '1';
+    if (existingInstance.looker_host) {
+      const existingIdx = profiles.findIndex(
+        p => p.host.toLowerCase() === existingInstance.looker_host.toLowerCase()
+      );
+      if (existingIdx !== -1) {
+        defaultChoice = String(existingIdx + 1);
+      }
+    } else {
+      const defaultProfileIdx = profiles.findIndex(p => p.isDefault);
+      if (defaultProfileIdx !== -1) {
+        defaultChoice = String(defaultProfileIdx + 1);
+      }
+    }
+
     const choiceInput = await askQuestion(`\nSelect a Looker profile or custom [${defaultChoice}]: `);
     const choiceStr = choiceInput || defaultChoice;
     const choiceNum = parseInt(choiceStr, 10);
@@ -254,14 +249,16 @@ async function promptLookerConnection(existingInstance = {}) {
         looker_host: selected.host,
         looker_port: selected.port,
         looker_ssl: selected.ssl,
+        looker_profile: selected.name,
         auth_mode: authMode
       };
     } else if (choiceStr && !choiceStr.match(/^\d+$/)) {
       const host = choiceStr.trim().replace(/^https?:\/\//, '').replace(/\/.*$/, '');
       const portInput = await askQuestion(`Enter Looker API Port [${existingInstance.looker_port || '443'}]: `);
       const port = portInput || existingInstance.looker_port || '443';
+      const looker_profile = resolveLookerProfileName({ looker_host: host, looker_port: port });
       const authMode = await promptInstanceAuthMode(host, existingInstance.auth_mode);
-      return { looker_host: host, looker_port: port, looker_ssl: true, auth_mode: authMode };
+      return { looker_host: host, looker_port: port, looker_ssl: true, looker_profile, auth_mode: authMode };
     }
   }
 
@@ -274,12 +271,14 @@ async function promptLookerConnection(existingInstance = {}) {
   
   const portInput = await askQuestion(`Enter Looker API Port [${existingInstance.looker_port || '443'}]: `);
   const port = portInput || existingInstance.looker_port || '443';
+  const looker_profile = resolveLookerProfileName({ looker_host: host, looker_port: port });
   const authMode = await promptInstanceAuthMode(host, existingInstance.auth_mode);
 
   return {
     looker_host: host,
     looker_port: port,
     looker_ssl: true,
+    looker_profile,
     auth_mode: authMode
   };
 }
@@ -357,7 +356,7 @@ async function promptLookerServiceAccount(connectionConfig, gcpConfig, existingC
   console.log(`\n🔎 Inspecting Looker host ${connectionConfig.looker_host} for existing service accounts...`);
   let matchedSAs = [];
   try {
-    const out = execSync(`looker-cli api user search_users --is_service_account=true --host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`, { encoding: 'utf8', stdio: 'pipe' });
+    const out = execSync(`looker-cli api user search_users --is_service_account=true ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
     const users = JSON.parse(out);
     if (users && users.length > 0) {
       matchedSAs = users.filter((u) => {
