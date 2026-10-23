@@ -200,6 +200,13 @@ function updateLocalConfigs(gcfUrl, publicUrl, instances = [], canonicalGcfUrl =
     const gcfUrlOrigin = gcfUrl.replace(/\/+$/, '');
     const canonicalOrigin = canonicalGcfUrl ? canonicalGcfUrl.replace(/\/+$/, '') : '';
 
+    const hasOAuthInstance = (instances || []).some(inst => inst && inst.auth_mode === 'oauth');
+    const hasServerProxyInstance = (instances || []).length === 0 || (instances || []).some(inst => !inst || inst.auth_mode !== 'oauth');
+
+    if (!hasServerProxyInstance) {
+      manifest = manifest.replace(/\n?\s*scoped_user_attributes:\s*\[[\s\S]*?\]/g, '');
+    }
+
     const externalApiUrlSet = new Set([`"${gcfUrlOrigin}"`]);
     if (canonicalOrigin) {
       externalApiUrlSet.add(`"${canonicalOrigin}"`);
@@ -217,9 +224,12 @@ function updateLocalConfigs(gcfUrl, publicUrl, instances = [], canonicalGcfUrl =
     const requiredOAuthUrls = Array.from(oauthUrlSet);
 
     manifest = manifest.replace(/\n?\s*oauth2_urls:\s*\[[\s\S]*?\]/g, '');
+    const oauthBlock = hasOAuthInstance
+      ? `\n    oauth2_urls: [\n      ${requiredOAuthUrls.join(',\n      ')}\n    ]`
+      : '';
     manifest = manifest.replace(
       /external_api_urls:\s*\[([\s\S]*?)\]/,
-      `external_api_urls: [\n      ${externalApiUrlsList.join(',\n      ')}\n    ]\n    oauth2_urls: [\n      ${requiredOAuthUrls.join(',\n      ')}\n    ]`
+      `external_api_urls: [\n      ${externalApiUrlsList.join(',\n      ')}\n    ]${oauthBlock}`
     );
   }
 
