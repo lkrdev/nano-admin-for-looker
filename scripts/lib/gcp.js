@@ -91,13 +91,7 @@ async function scanExistingResources(config, getLookerSaFn) {
     gcpAccount = execSync('gcloud config get-value account', { encoding: 'utf8' }).trim();
   } catch (e) {}
 
-  console.log('\n🔎 Scanning Looker to verify target service account...');
-  let targetLookerSa = null;
-  if (config.looker_service_account && getLookerSaFn) {
-    targetLookerSa = await getLookerSaFn(config, config.looker_service_account);
-  }
-
-  console.log('🔎 Scanning GCP environment for existing resources...');
+  console.log('\n🔎 Scanning GCP environment for existing resources...');
   let secretHmacExists = false;
   try {
     execSync(`gcloud secrets describe GCF_HMAC_SECRET --project=${config.gcp_project_id}`, { stdio: 'ignore' });
@@ -112,7 +106,6 @@ async function scanExistingResources(config, getLookerSaFn) {
 
   return {
     gcpAccount,
-    targetLookerSa,
     secretHmacExists,
     functionExists
   };

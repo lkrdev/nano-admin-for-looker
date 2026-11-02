@@ -1,7 +1,9 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { execSync } = require('child_process');
 const { parseJsonFromStdout, buildLookerCliFlags } = require('./prereqs');
+const { askQuestion } = require('./ui');
 
 async function getLookerSaById(connectionConfig, saId) {
   if (!saId) return null;
@@ -200,6 +202,13 @@ function updateLocalConfigs(gcfUrl, publicUrl, instances = [], canonicalGcfUrl =
     const gcfUrlOrigin = gcfUrl.replace(/\/+$/, '');
     const canonicalOrigin = canonicalGcfUrl ? canonicalGcfUrl.replace(/\/+$/, '') : '';
 
+    const hasOAuthInstance = (instances || []).some(inst => inst && inst.auth_mode === 'oauth');
+    const hasServerProxyInstance = (instances || []).length === 0 || (instances || []).some(inst => !inst || inst.auth_mode !== 'oauth');
+
+    if (!hasServerProxyInstance) {
+      manifest = manifest.replace(/\n?\s*scoped_user_attributes:\s*\[[\s\S]*?\]/g, '');
+    }
+
     const externalApiUrlSet = new Set([`"${gcfUrlOrigin}"`]);
     if (canonicalOrigin) {
       externalApiUrlSet.add(`"${canonicalOrigin}"`);
@@ -217,22 +226,13 @@ function updateLocalConfigs(gcfUrl, publicUrl, instances = [], canonicalGcfUrl =
     const requiredOAuthUrls = Array.from(oauthUrlSet);
 
     manifest = manifest.replace(/\n?\s*oauth2_urls:\s*\[[\s\S]*?\]/g, '');
+    const oauthBlock = hasOAuthInstance
+      ? `\n    oauth2_urls: [\n      ${requiredOAuthUrls.join(',\n      ')}\n    ]`
+      : '';
     manifest = manifest.replace(
       /external_api_urls:\s*\[([\s\S]*?)\]/,
-      `external_api_urls: [\n      ${externalApiUrlsList.join(',\n      ')}\n    ]\n    oauth2_urls: [\n      ${requiredOAuthUrls.join(',\n      ')}\n    ]`
+      `external_api_urls: [\n      ${externalApiUrlsList.join(',\n      ')}\n    ]${oauthBlock}`
     );
-
-    fs.writeFileSync(manifestPath, manifest, 'utf8');
-    console.log('✅ Updated extension/manifest.lkml on disk.');
-  }
-
-  const primaryConn = (instances || [])
-    .map(inst => inst.modelSelection?.selected_connection || inst.modelSelection?.allowed_connections?.[0] || inst.model_allowed_db_connection_names?.[0])
-    .find(Boolean);
-  const modelLkmlPath = path.join(__dirname, '..', '..', 'extension', 'nano_admin.model.lkml');
-  if (primaryConn && fs.existsSync(modelLkmlPath)) {
-    fs.writeFileSync(modelLkmlPath, `connection: "${primaryConn}"\n`, 'utf8');
-    console.log(`✅ Updated extension/nano_admin.model.lkml on disk with connection: "${primaryConn}".`);
   }
 
   console.log('\n📦 Compiling extension React bundle with environment variables...');
@@ -396,7 +396,7 @@ async function discoverLookerProjectState(connectionConfig, projectName = 'nano_
     }
   } catch (e) {}
 
-  if (projectExists && (gitType === 'private' || gitType === 'bare')) {
+  if (projectExists && gitType !== 'public') {
     try {
       const keyOutput = execSync(`looker-cli api project git_deploy_key ${projectName} ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
       if (keyOutput && keyOutput.startsWith('ssh-')) {
@@ -512,6 +512,75 @@ async function ensureLookerModel(connectionConfig, modelName = 'nano_admin', pro
   }
 }
 
+function syncLookerProjectWithRemote(connectionConfig, projectName = 'nano_admin') {
+  setDevWorkspace(connectionConfig);
+  const flags = buildLookerCliFlags(connectionConfig);
+
+  let prodBranch = 'main';
+  try {
+    const projOut = execSync(`looker-cli api project project ${projectName} ${flags}`, { encoding: 'utf8', stdio: 'pipe' });
+    const proj = parseJsonFromStdout(projOut);
+    if (proj && proj.git_production_branch_name) {
+      prodBranch = proj.git_production_branch_name;
+    }
+
+    const branchesOut = execSync(`looker-cli api project all_git_branches ${projectName} --timeout=20 ${flags}`, { encoding: 'utf8', stdio: 'pipe' });
+    const branches = parseJsonFromStdout(branchesOut);
+    if (Array.isArray(branches) && branches.length > 0) {
+      const remoteBranches = branches
+        .filter(b => b && (b.is_remote || b.remote_name || b.name))
+        .map(b => b.remote_name || b.name)
+        .filter(name => name && name !== 'HEAD');
+
+      if (remoteBranches.length > 0 && !remoteBranches.includes(prodBranch)) {
+        const detectedBranch = remoteBranches.includes('main')
+          ? 'main'
+          : remoteBranches.includes('master')
+            ? 'master'
+            : remoteBranches[0];
+        const branchPayload = JSON.stringify({ git_production_branch_name: detectedBranch });
+        execSync(`echo '${branchPayload}' | looker-cli api project update_project ${projectName} - --timeout=15 ${flags}`, { stdio: 'pipe' });
+        prodBranch = detectedBranch;
+      }
+    }
+  } catch (e) {}
+
+  try {
+    console.log(`🔄 Pulling remote branch "${prodBranch}" into development workspace for "${projectName}"...`);
+    execSync(`looker-cli api project reset_project_to_remote ${projectName} --timeout=30 ${flags}`, { stdio: 'pipe' });
+    console.log(`✅ Synchronized development workspace with remote repository.`);
+  } catch (resetErr) {
+    console.warn(`⚠️ Warning: Could not reset project "${projectName}" to remote: ${resetErr.message}`);
+  }
+
+  try {
+    console.log(`🚀 Deploying project "${projectName}" (branch "${prodBranch}") to Looker production...`);
+    execSync(`looker-cli api project deploy_to_production ${projectName} --timeout=30 ${flags}`, { stdio: 'pipe' });
+    console.log(`✅ Deployed project "${projectName}" to production.`);
+    return true;
+  } catch (deployErr) {
+    try {
+      execSync(`looker-cli api project deploy_ref_to_production ${projectName} --branch="${prodBranch}" --timeout=30 ${flags}`, { stdio: 'pipe' });
+      console.log(`✅ Deployed branch "${prodBranch}" of project "${projectName}" to production.`);
+      return true;
+    } catch (fallbackErr) {
+      console.warn(`⚠️ Warning: Could not deploy project "${projectName}" to production automatically: ${fallbackErr.message}`);
+      return false;
+    }
+  }
+}
+
+function writeDeployKeyFile(lookerHost, projectName, deployKey) {
+  try {
+    const safeHost = String(lookerHost || 'looker').replace(/[^a-zA-Z0-9._-]/g, '_');
+    const keyFilePath = path.join(os.homedir(), `${projectName}_deploy_key_${safeHost}.pub`);
+    fs.writeFileSync(keyFilePath, `${deployKey.trim()}\n`, { encoding: 'utf8', mode: 0o600 });
+    return keyFilePath;
+  } catch (e) {
+    return null;
+  }
+}
+
 async function configureLookerProjectGit(connectionConfig, projectName = 'nano_admin', gitConfig = {}) {
   const gitType = gitConfig.git_type || 'bare';
   const remoteUrl = gitConfig.git_remote_url || '';
@@ -526,6 +595,9 @@ async function configureLookerProjectGit(connectionConfig, projectName = 'nano_a
           deployKey = keyOutput;
         }
       } catch (e) {}
+    }
+    if ((gitType === 'private' || gitType === 'public') && connectionConfig.projectState?.project && !connectionConfig.projectState.project.has_production_counterpart) {
+      syncLookerProjectWithRemote(connectionConfig, projectName);
     }
     return {
       git_type: gitType,
@@ -577,20 +649,44 @@ async function configureLookerProjectGit(connectionConfig, projectName = 'nano_a
       }
     }
 
+    let keyFilePath = null;
     if (deployKey) {
-      console.log(`🔑 Deploy key available for project "${projectName}".`);
+      keyFilePath = writeDeployKeyFile(connectionConfig.looker_host, projectName, deployKey);
+      console.log(`🔑 Deploy key ready for project "${projectName}"${keyFilePath ? ` (saved to ${keyFilePath})` : ''}.`);
     }
 
     let status = 'pending_key_registration';
     if (remoteUrl) {
-      try {
-        const payload = JSON.stringify({ git_remote_url: remoteUrl });
-        execSync(`echo '${payload}' | looker-cli api project update_project ${projectName} - --timeout=15 ${buildLookerCliFlags(connectionConfig)}`, { stdio: 'pipe' });
-        console.log(`✅ Successfully connected project "${projectName}" to remote Git repository: ${remoteUrl}`);
-        status = 'configured';
-      } catch (updateErr) {
-        console.log(`ℹ️  Notice: Remote Git URL "${remoteUrl}" staged. Deploy key needs to be registered with your Git provider to complete synchronization.`);
-        status = 'pending_key_registration';
+      let connected = false;
+      while (!connected) {
+        try {
+          const payload = JSON.stringify({ git_remote_url: remoteUrl });
+          execSync(`echo '${payload}' | looker-cli api project update_project ${projectName} - --timeout=20 ${buildLookerCliFlags(connectionConfig)}`, { stdio: 'pipe' });
+          console.log(`✅ Successfully connected project "${projectName}" to remote Git repository: ${remoteUrl}`);
+          syncLookerProjectWithRemote(connectionConfig, projectName);
+          status = 'configured';
+          connected = true;
+        } catch (updateErr) {
+          console.log(`\n🔑 Looker could not authenticate to "${remoteUrl}" yet.`);
+          console.log('   Looker requires the SSH deploy key to be registered on your Git repository before it will save the Git configuration.');
+          if (deployKey) {
+            console.log(`\n--- Public Deploy Key for ${connectionConfig.looker_host} ---`);
+            process.stdout.write(`${deployKey.trim()}\n`);
+            console.log('----------------------------------------------------');
+            if (keyFilePath) {
+              console.log(`📄 Key also written without line-wrapping to: ${keyFilePath}`);
+            }
+          }
+          const retryInput = await askQuestion(
+            `\n👉 Add the deploy key above to "${remoteUrl}" (with Read access), then press Enter to retry (or type "skip" to finish later): `
+          );
+          const normalized = retryInput.trim().toLowerCase();
+          if (normalized === 'skip' || normalized === 's' || normalized === 'n' || normalized === 'no') {
+            console.log(`ℹ️  Skipped Git remote binding for now. Project "${projectName}" will remain in Looker's Pending state until the key is registered and the remote URL is connected.`);
+            status = 'pending_key_registration';
+            break;
+          }
+        }
       }
     }
 
@@ -598,6 +694,7 @@ async function configureLookerProjectGit(connectionConfig, projectName = 'nano_a
       git_type: 'private',
       git_remote_url: remoteUrl,
       deploy_key: deployKey,
+      key_file_path: keyFilePath,
       status
     };
   }
@@ -607,8 +704,9 @@ async function configureLookerProjectGit(connectionConfig, projectName = 'nano_a
     if (remoteUrl) {
       try {
         const payload = JSON.stringify({ git_remote_url: remoteUrl });
-        execSync(`echo '${payload}' | looker-cli api project update_project ${projectName} - --timeout=15 ${buildLookerCliFlags(connectionConfig)}`, { stdio: 'pipe' });
+        execSync(`echo '${payload}' | looker-cli api project update_project ${projectName} - --timeout=20 ${buildLookerCliFlags(connectionConfig)}`, { stdio: 'pipe' });
         console.log(`✅ Successfully connected project "${projectName}" to public Git repository: ${remoteUrl}`);
+        syncLookerProjectWithRemote(connectionConfig, projectName);
       } catch (updateErr) {
         console.warn(`⚠️ Warning: Could not connect to public Git repository "${remoteUrl}": ${updateErr.message}`);
         status = 'error';
