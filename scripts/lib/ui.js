@@ -167,7 +167,7 @@ function printDeploymentSuccess(config, manifestContent, gcfUrl, isManifestUpToD
       const gitType = res.git?.git_type || 'bare';
       const gitDesc = gitType === 'bare'
         ? 'Bare repository (hosted on Looker server)'
-        : `${gitType} repository (${res.git?.git_remote_url || 'no url'})`;
+        : `${gitType} repository (${res.git?.git_remote_url || 'no url'})${res.git?.status === 'pending_key_registration' ? ' [PENDING DEPLOY KEY]' : ''}`;
       console.log(`      ├─ Git Connection:             ${gitDesc}`);
       
       const filesDesc = [
@@ -179,14 +179,19 @@ function printDeploymentSuccess(config, manifestContent, gcfUrl, isManifestUpToD
     });
   }
 
-  const privateInstancesNeedingKey = (projectResults || []).filter(r => r.git?.git_type === 'private' && r.git?.deploy_key);
+  const privateInstancesNeedingKey = (projectResults || []).filter(
+    r => r.git?.git_type === 'private' && r.git?.status === 'pending_key_registration' && r.git?.deploy_key
+  );
   if (privateInstancesNeedingKey.length > 0) {
     console.log('\n🔑 ACTION REQUIRED: REGISTER GIT DEPLOY KEYS (PRIVATE REPOSITORY):');
-    console.log('For each Looker instance, add the generated public SSH key as a Deploy Key in your remote Git repository:');
+    console.log('For each Looker instance below, add the generated public SSH key as a Deploy Key in your remote Git repository, then complete the Git connection in Looker (or re-run `npm run deploy`):');
     privateInstancesNeedingKey.forEach(r => {
       console.log(`\n--- Public Deploy Key for ${r.host} (${r.git.git_remote_url || 'remote repo'}) ---`);
-      console.log(r.git.deploy_key);
+      process.stdout.write(`${r.git.deploy_key.trim()}\n`);
       console.log('----------------------------------------------------');
+      if (r.git.key_file_path) {
+        console.log(`📄 Key file path: ${r.git.key_file_path}`);
+      }
     });
     console.log('👉 In your Git provider (GitHub, GitLab, etc.), navigate to Repository Settings -> Deploy Keys -> Add deploy key.');
     console.log('👉 Paste the public key above and grant Read access (or Read/Write if using Looker Git commit).');

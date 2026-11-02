@@ -101,18 +101,6 @@ function saveConfig(configPath, config) {
     instances: safeInstances
   };
 
-  // Backwards compatibility top-level fields for single instance
-  if (safeInstances.length > 0) {
-    safeConfig.looker_host = safeInstances[0].looker_host;
-    safeConfig.looker_port = safeInstances[0].looker_port;
-    safeConfig.looker_ssl = safeInstances[0].looker_ssl;
-    safeConfig.auth_mode = safeInstances[0].auth_mode;
-    safeConfig.git_type = safeInstances[0].git_type;
-    safeConfig.git_remote_url = safeInstances[0].git_remote_url;
-    safeConfig.model_unlimited_db_connections = safeInstances[0].model_unlimited_db_connections;
-    safeConfig.model_allowed_db_connection_names = safeInstances[0].model_allowed_db_connection_names;
-  }
-
   fs.writeFileSync(configPath, JSON.stringify(safeConfig, null, 2), 'utf8');
   console.log('✅ Configuration saved to deploy-config.json (sensitive data omitted).');
 }
@@ -160,7 +148,13 @@ async function decideUseSavedConfig(config) {
 }
 
 function getSavedConnectionConfig(config) {
-  return config.instances || [];
+  return (config.instances || []).map(inst => {
+    const looker_profile = inst.looker_profile || resolveLookerProfileName(inst);
+    return {
+      ...inst,
+      ...(looker_profile ? { looker_profile } : {})
+    };
+  });
 }
 
 function getSavedGCPConfig(config) {

@@ -309,18 +309,7 @@ function assembleMergedConfig(targetConnections, saConfigs, gcpConfig, gitConfig
 
   return {
     ...gcpConfig,
-    instances,
-    // Top level fields for backwards compatibility
-    looker_host: instances[0]?.looker_host || '',
-    looker_port: instances[0]?.looker_port || '443',
-    looker_ssl: instances[0]?.looker_ssl !== undefined ? instances[0].looker_ssl : true,
-    auth_mode: instances[0]?.auth_mode || 'server_proxy',
-    looker_service_account: instances[0]?.looker_service_account || '',
-    looker_credential_method: instances[0]?.looker_credential_method || 'generate',
-    git_type: instances[0]?.git_type || 'bare',
-    git_remote_url: instances[0]?.git_remote_url || '',
-    model_unlimited_db_connections: instances[0]?.model_unlimited_db_connections !== false,
-    model_allowed_db_connection_names: instances[0]?.model_allowed_db_connection_names || []
+    instances
   };
 }
 

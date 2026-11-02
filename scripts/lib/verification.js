@@ -59,11 +59,24 @@ async function runPostDeploymentVerification(config, gcfUrl) {
 
   for (const inst of instances) {
     let projectPass = false;
+    let projectDetails = '';
     try {
       const projOutput = execSync(`looker-cli api project project nano_admin ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' });
       const proj = parseJsonFromStdout(projOutput);
-      projectPass = Boolean(proj && (proj.id === 'nano_admin' || proj.name === 'nano_admin'));
-    } catch (e) {}
+      const exists = Boolean(proj && (proj.id === 'nano_admin' || proj.name === 'nano_admin'));
+      if (!exists) {
+        projectDetails = '(Project nano_admin not found)';
+      } else if (!proj.uses_git) {
+        projectDetails = '(Project is in Pending state — Git connection is not configured)';
+      } else {
+        projectPass = true;
+        if (!proj.has_production_counterpart) {
+          projectDetails = '(Git configured, awaiting initial production deployment)';
+        }
+      }
+    } catch (e) {
+      projectDetails = `(${e.message})`;
+    }
     if (!projectPass) allProjectsPass = false;
 
     let modelPass = false;
@@ -205,6 +218,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
       host: inst.looker_host,
       authMode: isOAuthMode ? 'oauth' : 'server_proxy',
       projectPass,
+      projectDetails,
       modelPass,
       attrPass,
       attrDetails,
@@ -228,7 +242,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
   console.log(`\nTarget Looker Instances (${instanceResults.length}):`);
   instanceResults.forEach((res, idx) => {
     console.log(`  [Instance ${idx + 1}] ${res.host}`);
-    console.log(`      ${res.projectPass ? '✅ PASS' : '❌ FAIL'} - Looker Project ('nano_admin')`);
+    console.log(`      ${res.projectPass ? '✅ PASS' : '❌ FAIL'} - Looker Project ('nano_admin')${res.projectDetails ? ` ${res.projectDetails}` : ''}`);
     console.log(`      ${res.modelPass ? '✅ PASS' : '❌ FAIL'} - Looker Model Configuration ('nano_admin')`);
     const authCheckLabel = res.authMode === 'oauth'
       ? "Looker OAuth Client ('nano_admin_oauth_client')"
