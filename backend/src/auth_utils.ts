@@ -2,7 +2,7 @@ import yaml from 'js-yaml';
 import * as https from 'https';
 import { URL } from 'url';
 
-import { LookerNodeSDK } from '@looker/sdk-node';
+import { LookerBackendSDK } from './looker_logging_sdk';
 
 const cachedWorkflowsByHost = new Map<string, { data: any; expiration: number }>();
 
@@ -85,7 +85,7 @@ export function resolveAuthorizedGroups(
   return [];
 }
 
-export async function getWorkflows(sdk: any, instanceHost?: string): Promise<any> {
+export async function getWorkflows(sdk: LookerBackendSDK | any, instanceHost?: string): Promise<any> {
   const cacheDurationMs = parseInt(process.env.ADMIN_PAGES_CACHE_DURATION_MS || '0', 10);
   const now = Date.now();
   const cacheKey = instanceHost
@@ -121,49 +121,14 @@ export async function getWorkflows(sdk: any, instanceHost?: string): Promise<any
   }
 }
 
-/**
- * Ephemerally fetches index.md content from the dev workspace using an isolated SDK session.
- * This guarantees the main production SDK session is never mutated.
- */
-export async function fetchDevIndexContent(sdk?: any): Promise<{ text: string | null; error: string | null }> {
-  console.log('Fetching development index.md using an isolated SDK session...');
-  let devSdk: any = null;
-  try {
-    if (sdk && sdk.authSession && sdk.authSession.settings) {
-      devSdk = LookerNodeSDK.init40(sdk.authSession.settings);
-    } else {
-      devSdk = LookerNodeSDK.init40();
-    }
-    await devSdk.ok(devSdk.update_session({ workspace_id: 'dev' }));
-
-    const baseUrl = devSdk.authSession.settings.base_url;
-    const authProps = await devSdk.authSession.authenticate({ headers: {} });
-    const url = `${baseUrl}/api/4.0/projects/nano_admin/file/content?file_path=index.md`;
-    const text = await fetchRawText(url, authProps.headers);
-    return { text, error: null };
-  } catch (err: any) {
-    console.error('Failed to fetch development index.md:', err);
-    return { text: null, error: err.message || String(err) };
-  } finally {
-    if (devSdk) {
-      try {
-        await devSdk.ok(devSdk.update_session({ workspace_id: 'production' }));
-      } catch (e) {
-        // Ignore cleanup error on ephemeral session
-      }
-    }
-  }
-}
-
-
-export async function getUserGroups(sdk: any, userId: string): Promise<string[]> {
+export async function getUserGroups(sdk: LookerBackendSDK | any, userId: string): Promise<string[]> {
   console.log(`Fetching group memberships for user ID: ${userId}`);
   const userDetails = await sdk.ok(sdk.user(userId, 'id,group_ids'));
   return (userDetails?.group_ids || []).map((g: any) => String(g));
 }
 
 export async function isUserAuthorized(
-  sdk: any,
+  sdk: LookerBackendSDK | any,
   userId: string,
   identifier: string,
   instanceHost?: string

@@ -1,7 +1,8 @@
 import { getWorkflows, resolveAuthorizedGroups } from '../../../auth_utils';
+import { LookerBackendSDK } from '../../../looker_logging_sdk';
 
 export interface WorkflowContext {
-  sdk: any;
+  sdk: LookerBackendSDK | any;
   userId: string;
   workflowId: string;
   instanceHost?: string;

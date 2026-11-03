@@ -1,4 +1,5 @@
 import * as crypto from 'crypto';
+import { LookerBackendSDK, formatHostForLog } from './looker_logging_sdk';
 
 if (!process.env.GCF_HMAC_SECRET) {
   if (process.env.NODE_ENV === 'test' || process.env.npm_lifecycle_event === 'test') {
@@ -48,33 +49,23 @@ export interface VerifyTokenResponse {
 
 export function verifyChallengeToken(instanceHost: string, userId: string, token: string): VerifyTokenResponse {
   if (!token) {
-    console.log(`[DEBUG] verifyChallengeToken: Token is missing for user ${userId} on ${instanceHost}`);
+    console.log(`[DEBUG] verifyChallengeToken: Token is missing for user ${userId} on ${formatHostForLog(instanceHost)}`);
     return { status: 'missing' };
   }
 
-  console.log(`[DEBUG] verifyChallengeToken: Received token for user ${userId} on ${instanceHost}. SHA256: ${hashForLog(token)}`);
+  console.log(`[DEBUG] verifyChallengeToken: Received token for user ${userId} on ${formatHostForLog(instanceHost)}. SHA256: ${hashForLog(token)}`);
 
   try {
     const parts = token.split('|');
-    let tokenHost = '';
-    let tokenUserId = '';
-    let tokenTimestampStr = '';
-    let random = '';
-    let signature = '';
-
-    if (parts.length === 5) {
-      [tokenHost, tokenUserId, tokenTimestampStr, random, signature] = parts;
-    } else if (parts.length === 4) {
-      // Legacy 4-part fallback format (userId|timestamp|random|signature)
-      [tokenUserId, tokenTimestampStr, random, signature] = parts;
-      tokenHost = instanceHost;
-    } else {
+    if (parts.length !== 5) {
       console.log(`[DEBUG] verifyChallengeToken: Invalid token format (split parts: ${parts.length})`);
       return { status: 'invalid' };
     }
 
+    const [tokenHost, tokenUserId, tokenTimestampStr, random, signature] = parts;
+
     if (tokenHost !== instanceHost || tokenUserId !== userId) {
-      console.log(`[DEBUG] verifyChallengeToken: Host or User ID mismatch. Host expected: ${instanceHost}, got: ${tokenHost}. User expected: ${userId}, got: ${tokenUserId}`);
+      console.log(`[DEBUG] verifyChallengeToken: Host or User ID mismatch. Host expected: ${formatHostForLog(instanceHost)}, got: ${formatHostForLog(tokenHost)}. User expected: ${userId}, got: ${tokenUserId}`);
       return { status: 'invalid' };
     }
 
@@ -84,9 +75,7 @@ export function verifyChallengeToken(instanceHost: string, userId: string, token
     }
 
     // Verify signature
-    const payload = parts.length === 5
-      ? `${tokenHost}|${tokenUserId}|${tokenTimestampStr}|${random}`
-      : `${tokenUserId}|${tokenTimestampStr}|${random}`;
+    const payload = `${tokenHost}|${tokenUserId}|${tokenTimestampStr}|${random}`;
     const hmac = crypto.createHmac('sha256', HMAC_SECRET);
     hmac.update(payload);
     const expectedSignature = hmac.digest('hex');
@@ -118,10 +107,17 @@ export function verifyChallengeToken(instanceHost: string, userId: string, token
   }
 }
 
-let challengeAttributeId: string | null = null;
+const challengeAttributeIdByHost = new Map<string, string>();
 
-export async function getChallengeAttributeId(sdk: any): Promise<string | null> {
-  if (challengeAttributeId) return challengeAttributeId;
+export function clearChallengeAttributeIdCache(): void {
+  challengeAttributeIdByHost.clear();
+}
+
+export async function getChallengeAttributeId(sdk: LookerBackendSDK | any, instanceHost?: string): Promise<string | null> {
+  const cacheKey = (instanceHost || '').trim().toLowerCase();
+  if (cacheKey && challengeAttributeIdByHost.has(cacheKey)) {
+    return challengeAttributeIdByHost.get(cacheKey) || null;
+  }
   if (!sdk) return null;
   try {
     const attrs = await sdk.ok(sdk.all_user_attributes({ fields: 'id,name' }));
@@ -131,40 +127,45 @@ export async function getChallengeAttributeId(sdk: any): Promise<string | null> 
         a.name === 'nano_admin_admin_extension_nano_admin_challenge'
     );
     if (attr) {
+      const logHost = formatHostForLog(cacheKey) || 'instance';
       // Pull attribute's domain whitelist and value_is_hidden to verify security
       try {
         const fullAttr = await sdk.ok(sdk.user_attribute(attr.id));
         if (!fullAttr.value_is_hidden) {
-          console.warn(`⚠️ Security warning: Looker User Attribute "${fullAttr.name}" is NOT marked as hidden!`);
+          console.warn(`⚠️ Security warning: Looker User Attribute "${fullAttr.name}" on ${logHost} is NOT marked as hidden!`);
         }
         if (!fullAttr.hidden_value_domain_whitelist) {
-          console.warn(`⚠️ Security warning: Looker User Attribute "${fullAttr.name}" does NOT have a domain whitelist configured!`);
+          console.warn(`⚠️ Security warning: Looker User Attribute "${fullAttr.name}" on ${logHost} does NOT have a domain whitelist configured!`);
         } else {
-          console.log(`ℹ️ Looker User Attribute "${fullAttr.name}" is configured with domain whitelist: ${fullAttr.hidden_value_domain_whitelist}`);
+          console.log(`ℹ️ Looker User Attribute "${fullAttr.name}" on ${logHost} is configured with domain whitelist: ${fullAttr.hidden_value_domain_whitelist}`);
         }
       } catch (err) {
-        console.warn('Failed to verify user attribute security properties:', err);
+        console.warn(`Failed to verify user attribute security properties on ${logHost}:`, err);
       }
 
-      challengeAttributeId = String(attr.id);
-      return challengeAttributeId;
+      const resolvedId = String(attr.id);
+      if (cacheKey) {
+        challengeAttributeIdByHost.set(cacheKey, resolvedId);
+      }
+      return resolvedId;
     }
   } catch (err) {
-    console.error('Failed to find user attribute ID by name:', err);
+    console.error(`Failed to find user attribute ID by name on ${formatHostForLog(cacheKey) || 'instance'}:`, err);
   }
   return null;
 }
 
-export async function refreshChallenge(sdk: any, instanceHost: string, userId: string): Promise<string> {
+export async function refreshChallenge(sdk: LookerBackendSDK | any, instanceHost: string, userId: string): Promise<string> {
   const newChallenge = generateChallengeToken(instanceHost, userId);
-  console.log(`[DEBUG] refreshChallenge: Generated new challenge for user ${userId} on ${instanceHost}. SHA256: ${hashForLog(newChallenge)}`);
+  const logHost = formatHostForLog(instanceHost);
+  console.log(`[DEBUG] refreshChallenge: Generated new challenge for user ${userId} on ${logHost}. SHA256: ${hashForLog(newChallenge)}`);
   if (sdk) {
-    const attrId = await getChallengeAttributeId(sdk);
+    const attrId = await getChallengeAttributeId(sdk, instanceHost);
     if (attrId) {
-      console.log(`[DEBUG] refreshChallenge: Setting nano_admin_challenge attribute (ID: ${attrId}) for user ${userId} on ${instanceHost}.`);
+      console.log(`[DEBUG] refreshChallenge: Setting nano_admin_challenge attribute (ID: ${attrId}) for user ${userId} on ${logHost}.`);
       await sdk.ok(sdk.set_user_attribute_user_value(userId, attrId, { value: newChallenge }));
     } else {
-      console.error('nano_admin_challenge user attribute ID not found on Looker instance.');
+      console.error(`nano_admin_challenge user attribute ID not found on Looker instance: ${logHost}.`);
     }
   }
   return newChallenge;

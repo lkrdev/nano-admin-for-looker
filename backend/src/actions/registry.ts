@@ -1,9 +1,11 @@
+import { LookerBackendSDK } from '../looker_logging_sdk';
+
 export interface ActionContext {
   instanceHost: string;
 }
 
 export type ActionHandler = (
-  sdk: any,
+  sdk: LookerBackendSDK,
   userId: string,
   payload: any,
   context?: ActionContext

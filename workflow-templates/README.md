@@ -89,10 +89,10 @@ The backend entry point must be `backend/index.ts`. It must export a handler fun
 ### Context & Handler Interface
 
 ```typescript
-import { LookerNodeSDK } from '@looker/sdk-node';
+import { LookerBackendSDK } from '../../../looker_logging_sdk';
 
 export interface WorkflowContext {
-  sdk: LookerNodeSDK;         // Authenticated Looker Node SDK Client
+  sdk: LookerBackendSDK;     // Authenticated Looker Backend SDK Client (production workspace only)
   userId: string;             // Authenticated Looker User ID triggering the request
   workflowId: string;         // Unique ID of the instantiated workflow
   parameters: any;            // Configured parameters for this instance

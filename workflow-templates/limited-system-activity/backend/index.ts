@@ -1,4 +1,5 @@
 import { getScopeGroupUserIds, UserIdLimitationResult, UserIdLimitation } from '../../../auth_utils';
+import { LookerBackendSDK } from '../../../looker_logging_sdk';
 
 export interface ExploreConfig {
   name: string;
@@ -8,7 +9,7 @@ export interface ExploreConfig {
 }
 
 export interface WorkflowContext {
-  sdk: any;
+  sdk: LookerBackendSDK | any;
   userId: string;
   workflowId: string;
   parameters: {

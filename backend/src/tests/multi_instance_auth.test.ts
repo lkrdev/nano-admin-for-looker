@@ -4,9 +4,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveAuthorizedGroups, isUserAuthorized, clearWorkflowCache, setCachedWorkflows } from '../auth_utils';
 import { isHostAllowed, authenticateRequest } from '../auth';
+import { getChallengeAttributeId, refreshChallenge, clearChallengeAttributeIdCache } from '../challenge';
 import { validateWorkflowsSchema } from '../actions/validate_dev_index';
+import { formatHostForLog, wrapLookerSDKWithLogging } from '../looker_logging_sdk';
 // @ts-ignore
-const { resolveAllowedInstances } = require('../../../scripts/lib/gcp');
+const { resolveAllowedInstances, sanitizeHostForSecret: gcpSanitizeHostForSecret } = require('../../../scripts/lib/gcp');
 
 test('resolveAuthorizedGroups — single-instance array format', () => {
   assert.deepEqual(resolveAuthorizedGroups(['1', '2', '3']), ['1', '2', '3']);
@@ -183,4 +185,126 @@ test('resolveAllowedInstances — generates comma-separated list from config', (
   assert.ok(resolved.includes('prod.looker.app'));
   assert.ok(resolved.includes('custom.looker.app'));
   assert.ok(resolved.includes('custom.looker.app:8443'));
+});
+
+test('getChallengeAttributeId & refreshChallenge — caches user attribute ID per instanceHost without cross-instance pollution', async () => {
+  clearChallengeAttributeIdCache();
+
+  const updatedCalls: Array<{ host: string; userId: string; attrId: string; value: string }> = [];
+
+  function createMockSdk(host: string, attrId: string) {
+    let lookupCount = 0;
+    return {
+      getLookupCount: () => lookupCount,
+      ok: async (val: any) => await val,
+      all_user_attributes: async () => {
+        lookupCount++;
+        return [{ id: attrId, name: 'nano_admin_admin_extension_nano_admin_challenge' }];
+      },
+      user_attribute: async (id: string) => ({
+        id,
+        name: 'nano_admin_admin_extension_nano_admin_challenge',
+        value_is_hidden: true,
+        hidden_value_domain_whitelist: 'https://backend.example.run.app'
+      }),
+      set_user_attribute_user_value: async (userId: string, id: string, body: { value: string }) => {
+        updatedCalls.push({ host, userId, attrId: id, value: body.value });
+        return {};
+      }
+    };
+  }
+
+  const sdkLatam = createMockSdk('demolatam.cloud.looker.com', '20');
+  const sdkEmea = createMockSdk('demoemea.cloud.looker.com', '27');
+
+  // 1. First request on demolatam resolves and sets attribute ID 20
+  await refreshChallenge(sdkLatam, 'demolatam.cloud.looker.com', '1762');
+  assert.equal(sdkLatam.getLookupCount(), 1);
+  assert.equal(updatedCalls.length, 1);
+  assert.equal(updatedCalls[0].host, 'demolatam.cloud.looker.com');
+  assert.equal(updatedCalls[0].attrId, '20');
+
+  // 2. Subsequent request on demoemea resolves and sets its own attribute ID 27 (not 20)
+  await refreshChallenge(sdkEmea, 'demoemea.cloud.looker.com', '2016');
+  assert.equal(sdkEmea.getLookupCount(), 1);
+  assert.equal(updatedCalls.length, 2);
+  assert.equal(updatedCalls[1].host, 'demoemea.cloud.looker.com');
+  assert.equal(updatedCalls[1].attrId, '27');
+
+  // 3. Second call on demolatam uses cached ID 20 without re-querying all_user_attributes
+  const cachedLatamId = await getChallengeAttributeId(sdkLatam, 'DEMOLATAM.CLOUD.LOOKER.COM');
+  assert.equal(cachedLatamId, '20');
+  assert.equal(sdkLatam.getLookupCount(), 1);
+
+  // 4. Second call on demoemea uses cached ID 27 without re-querying all_user_attributes
+  const cachedEmeaId = await getChallengeAttributeId(sdkEmea, 'demoemea.cloud.looker.com');
+  assert.equal(cachedEmeaId, '27');
+  assert.equal(sdkEmea.getLookupCount(), 1);
+});
+
+test('LookerBackendSDK wrapper — blocks update_session and /session mutations at runtime', async () => {
+  const rawMockSdk: any = {
+    ok: async (val: any) => await val,
+    me: async () => ({ id: '1' }),
+    update_session: async () => ({ workspace_id: 'dev' }),
+    patch: async (path: string) => ({ path }),
+    put: async (path: string) => ({ path })
+  };
+
+  const wrappedSdk: any = wrapLookerSDKWithLogging(rawMockSdk, {
+    instanceHost: 'demoemea.cloud.looker.com',
+    userId: '2016',
+    action: 'test_action'
+  });
+
+  // Safe methods continue to work
+  const meRes = await wrappedSdk.ok(wrappedSdk.me());
+  assert.equal(meRes.id, '1');
+
+  // Calling update_session throws immediately
+  assert.throws(
+    () => wrappedSdk.update_session({ workspace_id: 'dev' }),
+    /Security Violation: Calling update_session or switching the backend Looker SDK session to the "dev" workspace is strictly forbidden/
+  );
+
+  // Calling patch or put targeting /session throws immediately
+  assert.throws(
+    () => wrappedSdk.patch('/session', { workspace_id: 'dev' }),
+    /Security Violation: Mutating the backend Looker SDK session workspace is strictly forbidden/
+  );
+  assert.throws(
+    () => wrappedSdk.put('/api/4.0/session', { workspace_id: 'dev' }),
+    /Security Violation: Mutating the backend Looker SDK session workspace is strictly forbidden/
+  );
+});
+
+test('formatHostForLog — limits logged hostnames to max 16 chars (12 leading + 4 hex hash when longer)', () => {
+  // <= 16 chars returned as-is (lowercased/trimmed)
+  assert.equal(formatHostForLog('short.host.com'), 'short.host.com');
+  assert.equal(formatHostForLog('1234567890123456'), '1234567890123456');
+  assert.equal(formatHostForLog('1234567890123456').length, 16);
+
+  // > 16 chars truncated to 12 leading + 4 hex hash = 16 chars
+  const longHost1 = 'demoemea.cloud.looker.com';
+  const formatted1 = formatHostForLog(longHost1);
+  assert.equal(formatted1.length, 16);
+  assert.ok(formatted1.startsWith('demoemea.clo'));
+  assert.match(formatted1.slice(12), /^[0-9a-f]{4}$/);
+
+  const longHost2 = 'demowest.cloud.looker.com';
+  const formatted2 = formatHostForLog(longHost2);
+  assert.equal(formatted2.length, 16);
+  assert.ok(formatted2.startsWith('demowest.clo'));
+  assert.notEqual(formatted1, formatted2);
+
+  // Two long hosts with identical 12-char prefixes still differ in their 4-char hash suffix
+  const prefixA = '3ad6a770-cb93-1111.looker.app';
+  const prefixB = '3ad6a770-cb93-2222.looker.app';
+  assert.equal(formatHostForLog(prefixA).slice(0, 12), formatHostForLog(prefixB).slice(0, 12));
+  assert.notEqual(formatHostForLog(prefixA), formatHostForLog(prefixB));
+});
+
+test('gcp.sanitizeHostForSecret — consistently strips port for secret lookup', () => {
+  assert.equal(gcpSanitizeHostForSecret('custom.looker.app:8443'), 'custom_looker_app');
+  assert.equal(gcpSanitizeHostForSecret('custom.looker.app'), 'custom_looker_app');
 });
