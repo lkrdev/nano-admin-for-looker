@@ -1,5 +1,7 @@
+import { LookerBackendSDK } from '../../../looker_logging_sdk';
+
 export interface WorkflowContext {
-  sdk: any;
+  sdk: LookerBackendSDK | any;
   userId: string;
   workflowId: string;
   parameters: {

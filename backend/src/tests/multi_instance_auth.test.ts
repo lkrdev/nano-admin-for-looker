@@ -6,8 +6,9 @@ import { resolveAuthorizedGroups, isUserAuthorized, clearWorkflowCache, setCache
 import { isHostAllowed, authenticateRequest } from '../auth';
 import { getChallengeAttributeId, refreshChallenge, clearChallengeAttributeIdCache } from '../challenge';
 import { validateWorkflowsSchema } from '../actions/validate_dev_index';
+import { formatHostForLog, wrapLookerSDKWithLogging } from '../looker_logging_sdk';
 // @ts-ignore
-const { resolveAllowedInstances } = require('../../../scripts/lib/gcp');
+const { resolveAllowedInstances, sanitizeHostForSecret: gcpSanitizeHostForSecret } = require('../../../scripts/lib/gcp');
 
 test('resolveAuthorizedGroups — single-instance array format', () => {
   assert.deepEqual(resolveAuthorizedGroups(['1', '2', '3']), ['1', '2', '3']);
@@ -239,4 +240,71 @@ test('getChallengeAttributeId & refreshChallenge — caches user attribute ID pe
   const cachedEmeaId = await getChallengeAttributeId(sdkEmea, 'demoemea.cloud.looker.com');
   assert.equal(cachedEmeaId, '27');
   assert.equal(sdkEmea.getLookupCount(), 1);
+});
+
+test('LookerBackendSDK wrapper — blocks update_session and /session mutations at runtime', async () => {
+  const rawMockSdk: any = {
+    ok: async (val: any) => await val,
+    me: async () => ({ id: '1' }),
+    update_session: async () => ({ workspace_id: 'dev' }),
+    patch: async (path: string) => ({ path }),
+    put: async (path: string) => ({ path })
+  };
+
+  const wrappedSdk: any = wrapLookerSDKWithLogging(rawMockSdk, {
+    instanceHost: 'demoemea.cloud.looker.com',
+    userId: '2016',
+    action: 'test_action'
+  });
+
+  // Safe methods continue to work
+  const meRes = await wrappedSdk.ok(wrappedSdk.me());
+  assert.equal(meRes.id, '1');
+
+  // Calling update_session throws immediately
+  assert.throws(
+    () => wrappedSdk.update_session({ workspace_id: 'dev' }),
+    /Security Violation: Calling update_session or switching the backend Looker SDK session to the "dev" workspace is strictly forbidden/
+  );
+
+  // Calling patch or put targeting /session throws immediately
+  assert.throws(
+    () => wrappedSdk.patch('/session', { workspace_id: 'dev' }),
+    /Security Violation: Mutating the backend Looker SDK session workspace is strictly forbidden/
+  );
+  assert.throws(
+    () => wrappedSdk.put('/api/4.0/session', { workspace_id: 'dev' }),
+    /Security Violation: Mutating the backend Looker SDK session workspace is strictly forbidden/
+  );
+});
+
+test('formatHostForLog — limits logged hostnames to max 16 chars (12 leading + 4 hex hash when longer)', () => {
+  // <= 16 chars returned as-is (lowercased/trimmed)
+  assert.equal(formatHostForLog('short.host.com'), 'short.host.com');
+  assert.equal(formatHostForLog('1234567890123456'), '1234567890123456');
+  assert.equal(formatHostForLog('1234567890123456').length, 16);
+
+  // > 16 chars truncated to 12 leading + 4 hex hash = 16 chars
+  const longHost1 = 'demoemea.cloud.looker.com';
+  const formatted1 = formatHostForLog(longHost1);
+  assert.equal(formatted1.length, 16);
+  assert.ok(formatted1.startsWith('demoemea.clo'));
+  assert.match(formatted1.slice(12), /^[0-9a-f]{4}$/);
+
+  const longHost2 = 'demowest.cloud.looker.com';
+  const formatted2 = formatHostForLog(longHost2);
+  assert.equal(formatted2.length, 16);
+  assert.ok(formatted2.startsWith('demowest.clo'));
+  assert.notEqual(formatted1, formatted2);
+
+  // Two long hosts with identical 12-char prefixes still differ in their 4-char hash suffix
+  const prefixA = '3ad6a770-cb93-1111.looker.app';
+  const prefixB = '3ad6a770-cb93-2222.looker.app';
+  assert.equal(formatHostForLog(prefixA).slice(0, 12), formatHostForLog(prefixB).slice(0, 12));
+  assert.notEqual(formatHostForLog(prefixA), formatHostForLog(prefixB));
+});
+
+test('gcp.sanitizeHostForSecret — consistently strips port for secret lookup', () => {
+  assert.equal(gcpSanitizeHostForSecret('custom.looker.app:8443'), 'custom_looker_app');
+  assert.equal(gcpSanitizeHostForSecret('custom.looker.app'), 'custom_looker_app');
 });

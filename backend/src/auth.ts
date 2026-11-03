@@ -1,6 +1,7 @@
 import * as ff from '@google-cloud/functions-framework';
 import * as crypto from 'crypto';
 import { verifyChallengeToken, ChallengeVerificationResult } from './challenge';
+import { formatHostForLog } from './looker_logging_sdk';
 import {
   FetchLookerUserFn,
   InstanceAuthMode,
@@ -58,7 +59,7 @@ export function authenticateRequest(req: ff.Request): AuthenticationResult {
 
   // Validate host against LOOKER_ALLOWED_INSTANCES allowlist
   if (!isHostAllowed(sanitizedHost, process.env.LOOKER_ALLOWED_INSTANCES)) {
-    console.warn(`[DEBUG] authenticateRequest: Request rejected. Host "${sanitizedHost}" is not in LOOKER_ALLOWED_INSTANCES.`);
+    console.warn(`[DEBUG] authenticateRequest: Request rejected. Host "${formatHostForLog(sanitizedHost)}" is not in LOOKER_ALLOWED_INSTANCES.`);
     return { trustedInstanceHost: sanitizedHost, trustedUserId: '', userId: '', status: 'forbidden', authMode: effectiveMode };
   }
 
@@ -75,7 +76,7 @@ export function authenticateRequest(req: ff.Request): AuthenticationResult {
   }
 
   const challenge = authHeader.substring('looker-attribute-challenge '.length).trim();
-  console.log(`[DEBUG] authenticateRequest: Parsed challenge for user ${userId} on ${sanitizedHost || 'unknown-host'}. SHA256: ${hashForLog(challenge)}`);
+  console.log(`[DEBUG] authenticateRequest: Parsed challenge for user ${userId} on ${formatHostForLog(sanitizedHost) || 'unknown-host'}. SHA256: ${hashForLog(challenge)}`);
 
   if (!userId || !challenge) {
     console.log('[DEBUG] authenticateRequest: Empty userId or challenge parsed');
@@ -104,7 +105,7 @@ export async function authenticateRequestAsync(
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
     if (!isHostAllowed(sanitizedHost, process.env.LOOKER_ALLOWED_INSTANCES)) {
-      console.warn(`[DEBUG] authenticateRequestAsync: OAuth request rejected. Host "${sanitizedHost}" is not in LOOKER_ALLOWED_INSTANCES.`);
+      console.warn(`[DEBUG] authenticateRequestAsync: OAuth request rejected. Host "${formatHostForLog(sanitizedHost)}" is not in LOOKER_ALLOWED_INSTANCES.`);
       return {
         trustedInstanceHost: sanitizedHost,
         trustedUserId: '',

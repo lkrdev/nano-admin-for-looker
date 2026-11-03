@@ -58,6 +58,7 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
   // Wrap SDK with workflow logging context
   const workflowSdk = wrapLookerSDKWithLogging(sdk, {
     userId,
+    instanceHost,
     workflowId: workflow.id,
     action: workflowAction
   });

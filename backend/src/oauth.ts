@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import * as https from 'https';
 import { URL, URLSearchParams } from 'url';
 import { isHostAllowed } from './auth';
+import { formatHostForLog } from './looker_logging_sdk';
 
 export type InstanceAuthMode = 'server_proxy' | 'oauth';
 
@@ -132,7 +133,7 @@ export function handleOAuthAuthorize(req: ff.Request, res: ff.Response): void {
   }
 
   if (!isHostAllowed(host, process.env.LOOKER_ALLOWED_INSTANCES)) {
-    console.warn(`[OAuth] Authorize rejected: Host "${host}" is not in LOOKER_ALLOWED_INSTANCES.`);
+    console.warn(`[OAuth] Authorize rejected: Host "${formatHostForLog(host)}" is not in LOOKER_ALLOWED_INSTANCES.`);
     res.status(403).json({
       error: 'forbidden',
       error_description: `Looker instance host "${host}" is not permitted by this service.`
@@ -142,7 +143,7 @@ export function handleOAuthAuthorize(req: ff.Request, res: ff.Response): void {
 
   const searchParams = new URLSearchParams(combinedParams);
   const targetAuthUrl = `https://${host}/auth?${searchParams.toString()}`;
-  console.log(`[OAuth] Redirecting authorization request to Looker instance: ${host}`);
+  console.log(`[OAuth] Redirecting authorization request to Looker instance: ${formatHostForLog(host)}`);
   res.redirect(302, targetAuthUrl);
 }
 
@@ -215,7 +216,7 @@ export async function handleOAuthTokenExchange(
   }
 
   if (!isHostAllowed(targetHost, process.env.LOOKER_ALLOWED_INSTANCES)) {
-    console.warn(`[OAuth] Token exchange rejected: Host "${targetHost}" is not in LOOKER_ALLOWED_INSTANCES.`);
+    console.warn(`[OAuth] Token exchange rejected: Host "${formatHostForLog(targetHost)}" is not in LOOKER_ALLOWED_INSTANCES.`);
     res.status(403).json({
       error: 'forbidden',
       error_description: `Looker instance host "${targetHost}" is not permitted by this service.`
@@ -229,7 +230,7 @@ export async function handleOAuthTokenExchange(
   }
 
   const tokenEndpoint = `https://${targetHost}/api/token`;
-  console.log(`[OAuth] Proxying token exchange (${bodyParams.grant_type || 'unknown'}) to ${targetHost}`);
+  console.log(`[OAuth] Proxying token exchange (${bodyParams.grant_type || 'unknown'}) to ${formatHostForLog(targetHost)}`);
 
   try {
     const upstream = await httpPostFn(tokenEndpoint, formParams.toString());
@@ -241,7 +242,7 @@ export async function handleOAuthTokenExchange(
     }
     res.status(upstream.statusCode).json(parsedBody);
   } catch (err: any) {
-    console.error(`[OAuth] Token exchange failed for ${targetHost}:`, err);
+    console.error(`[OAuth] Token exchange failed for ${formatHostForLog(targetHost)}:`, err);
     res.status(502).json({
       error: 'bad_gateway',
       error_description: `Failed to reach Looker token endpoint on ${targetHost}: ${err.message || String(err)}`
@@ -307,7 +308,7 @@ export async function verifyLookerOAuthToken(
 
     return { status: 'valid', userId: verifiedUserId };
   } catch (err: any) {
-    console.error(`[OAuth] Error verifying Bearer token against ${cleanHost}:`, err.message || err);
+    console.error(`[OAuth] Error verifying Bearer token against ${formatHostForLog(cleanHost)}:`, err.message || err);
     return { status: 'invalid', userId: cleanExpectedUser };
   }
 }

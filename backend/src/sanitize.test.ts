@@ -2,9 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert';
 import { sanitizeHostForSecret } from './index';
 
-test('sanitizeHostForSecret — standard host names', () => {
+test('sanitizeHostForSecret — standard host names and port stripping', () => {
   const result = sanitizeHostForSecret('looker.example.com');
   assert.strictEqual(result, 'looker_example_com');
+  assert.strictEqual(sanitizeHostForSecret('looker.example.com:8443'), 'looker_example_com');
+  assert.strictEqual(sanitizeHostForSecret('LOOKER.EXAMPLE.COM:19999'), 'looker_example_com');
   assert.strictEqual(`NANO_ADMIN_LOOKERSDK_CLIENT_SECRET_${result}`.length < 255, true);
 });
 

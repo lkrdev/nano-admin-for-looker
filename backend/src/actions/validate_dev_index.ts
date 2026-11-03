@@ -1,24 +1,17 @@
 import fs from 'fs';
 import path from 'path';
-import { fetchDevIndexContent, parseYamlWithStatus } from '../auth_utils';
+import { parseYamlWithStatus } from '../auth_utils';
 import { ActionHandler } from './registry';
 
-export const validateDevIndexHandler: ActionHandler = async (sdk, userId, payload) => {
-  let text = typeof payload?.index_content === 'string' && payload.index_content.trim() ? payload.index_content : '';
-  let fetchError: string | null = null;
-
-  if (!text) {
-    const devFetch = await fetchDevIndexContent(sdk);
-    text = devFetch.text || '';
-    fetchError = devFetch.error;
-  }
+export const validateDevIndexHandler: ActionHandler = async (_sdk, _userId, payload) => {
+  const text = typeof payload?.index_content === 'string' && payload.index_content.trim() ? payload.index_content : '';
 
   if (!text) {
     return {
       valid: false,
       error_type: 'fetch_error',
       message: 'Failed to retrieve index.md content for validation.',
-      details: fetchError || 'Development index.md file content not provided or empty.'
+      details: 'Development index.md file content must be provided by the client.'
     };
   }
 

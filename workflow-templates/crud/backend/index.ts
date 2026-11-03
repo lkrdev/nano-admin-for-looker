@@ -1,4 +1,4 @@
-import { LookerNodeSDK } from '@looker/sdk-node';
+import { LookerBackendSDK } from '../../../looker_logging_sdk';
 
 export interface UserIdLimitation {
   mode?: 'self' | 'scope_groups' | 'none';
@@ -12,7 +12,7 @@ export interface UserIdLimitationResult {
 }
 
 export interface WorkflowContext {
-  sdk: any;
+  sdk: LookerBackendSDK | any;
   userId: string;
   workflowId: string;
   parameters: {

@@ -2,8 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import { getWorkflows, getUserGroups, resolveAuthorizedGroups } from '../auth_utils';
 import { ActionContext } from './registry';
+import { LookerBackendSDK } from '../looker_logging_sdk';
 
-export async function getWorkflowsHandler(sdk: any, userId: string, payload: any, context?: ActionContext): Promise<any> {
+export async function getWorkflowsHandler(sdk: LookerBackendSDK, userId: string, payload: any, context?: ActionContext): Promise<any> {
   const instanceHost = context?.instanceHost;
   const configData = await getWorkflows(sdk, instanceHost);
   const userGroups = await getUserGroups(sdk, userId);

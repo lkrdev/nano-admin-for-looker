@@ -1,11 +1,10 @@
 import * as ff from '@google-cloud/functions-framework';
-import { LookerNodeSDK } from '@looker/sdk-node';
 import cors from 'cors';
 import { authenticateRequestAsync } from './auth';
 import { checkRateLimit, refreshChallenge } from './challenge';
 import { handleOAuthAuthorize, handleOAuthTokenExchange } from './oauth';
 import { actionRegistry } from './actions/registry';
-import { wrapLookerSDKWithLogging } from './looker_logging_sdk';
+import { initLookerBackendSDK, LookerBackendSDK, wrapLookerSDKWithLogging, formatHostForLog } from './looker_logging_sdk';
 
 // Set up CORS configuration
 const corsHandler = cors({
@@ -39,12 +38,12 @@ class CustomNodeSettings extends ApiSettings {
 }
 
 // SDK Cache for Multi-Instance Support (host -> Looker SDK instance)
-const sdkCache = new Map<string, any>();
+const sdkCache = new Map<string, LookerBackendSDK>();
 
 import crypto from 'crypto';
 
 export function sanitizeHostForSecret(host: string): string {
-  const cleanHost = (host || '').trim().toLowerCase();
+  const cleanHost = (host || '').trim().toLowerCase().replace(/:\d+$/, '');
   let sanitized = cleanHost.replace(/[^a-z0-9]/g, '_');
   if (sanitized.length > 180) {
     const hash = crypto.createHash('sha256').update(cleanHost).digest('hex').substring(0, 16);
@@ -53,13 +52,13 @@ export function sanitizeHostForSecret(host: string): string {
   return sanitized;
 }
 
-function getSDKForInstance(trustedHost?: string): any {
+function getSDKForInstance(trustedHost?: string): LookerBackendSDK {
   const cleanHost = trustedHost ? trustedHost.trim().toLowerCase() : '';
   if (!cleanHost) {
     throw new Error('Cannot initialize Looker SDK: missing Looker instance host.');
   }
   if (sdkCache.has(cleanHost)) {
-    return sdkCache.get(cleanHost);
+    return sdkCache.get(cleanHost)!;
   }
 
   const sanitizedHost = sanitizeHostForSecret(cleanHost);
@@ -72,14 +71,14 @@ function getSDKForInstance(trustedHost?: string): any {
     );
   }
 
-  console.log(`[SDKManager] Initializing Looker SDK with Secret Manager credentials for host: ${cleanHost}`);
+  console.log(`[SDKManager] Initializing Looker SDK with Secret Manager credentials for host: ${formatHostForLog(cleanHost)}`);
   const baseUrl = `https://${cleanHost}`;
   const customSettings = new CustomNodeSettings({
     base_url: baseUrl,
     client_id: perInstClientId,
     client_secret: perInstClientSecret
   });
-  const sdkInstance = LookerNodeSDK.init40(customSettings as any);
+  const sdkInstance = initLookerBackendSDK(customSettings as any, { instanceHost: cleanHost });
   sdkCache.set(cleanHost, sdkInstance);
   return sdkInstance;
 }
@@ -143,7 +142,7 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
     }
 
     if (status !== 'valid' && authMode === 'oauth') {
-      console.warn(`[DEBUG] OAuth authentication failed for user "${userId}" on "${trustedInstanceHost}" (Status: ${status}). Returning 401 oauth_required.`);
+      console.warn(`[DEBUG] OAuth authentication failed for user "${userId}" on "${formatHostForLog(trustedInstanceHost)}" (Status: ${status}). Returning 401 oauth_required.`);
       res.status(401).json({
         error: 'oauth_required',
         message: 'Looker OAuth access token is missing, expired, or invalid.',
@@ -157,7 +156,7 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
     try {
       targetSdk = getSDKForInstance(trustedInstanceHost);
     } catch (sdkErr: any) {
-      console.error(`[SDKManager] Failed to initialize Looker SDK for "${trustedInstanceHost}":`, sdkErr);
+      console.error(`[SDKManager] Failed to initialize Looker SDK for "${formatHostForLog(trustedInstanceHost)}":`, sdkErr);
       res.status(500).json({
         error: 'sdk_configuration_error',
         message: sdkErr.message || `Looker API credentials are not configured for host "${trustedInstanceHost}".`
@@ -166,7 +165,7 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
     }
 
     if (status !== 'valid') {
-      console.warn(`[DEBUG] Authentication failed for user "${userId}" on "${trustedInstanceHost}" (Status: ${status}). Resetting/refreshing challenge...`);
+      console.warn(`[DEBUG] Authentication failed for user "${userId}" on "${formatHostForLog(trustedInstanceHost)}" (Status: ${status}). Resetting/refreshing challenge...`);
 
       if (!userId) {
         res.status(401).json({
@@ -181,14 +180,14 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
         : (req.ip || 'global');
       const allowed = checkRateLimit(rateLimitKey);
       if (!allowed) {
-        console.warn(`Rate limit exceeded for client: ${rateLimitKey}`);
+        console.warn(`Rate limit exceeded for client: ${formatHostForLog(trustedInstanceHost)}_${userId}`);
         res.status(429).json({ error: 'too_many_requests', message: 'Rate limit exceeded. Please try again later.' });
         return;
       }
 
       try {
         await refreshChallenge(targetSdk, trustedInstanceHost, userId);
-        console.log(`[DEBUG] Successfully refreshed challenge in Looker for user ${userId} on ${trustedInstanceHost}. Returning 401 to trigger client retry.`);
+        console.log(`[DEBUG] Successfully refreshed challenge in Looker for user ${userId} on ${formatHostForLog(trustedInstanceHost)}. Returning 401 to trigger client retry.`);
         res.status(401).json({
           error: 'challenge_required',
           message: 'Authentication challenge is missing, expired, or invalid. A new challenge has been provisioned.',
@@ -196,7 +195,7 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
           build_timestamp: process.env.BUILD_TIMESTAMP || ''
         });
       } catch (err) {
-        console.error(`Failed to refresh challenge for user ${userId} on ${trustedInstanceHost}:`, err);
+        console.error(`Failed to refresh challenge for user ${userId} on ${formatHostForLog(trustedInstanceHost)}:`, err);
         res.status(500).json({ error: 'Internal Server Error', details: 'Could not generate authentication challenge' });
       }
       return;
@@ -206,9 +205,9 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
     const SLIDING_REFRESH_THRESHOLD_MS = 1 * 60 * 60 * 1000; // 1 hour
     if (authMode !== 'oauth' && tokenAgeMs !== undefined && tokenAgeMs > SLIDING_REFRESH_THRESHOLD_MS) {
       if (checkSlidingRefreshCooldown(trustedInstanceHost, userId)) {
-        console.log(`[DEBUG] Sliding refresh triggered for user ${userId} on ${trustedInstanceHost} (Token age: ${Math.round(tokenAgeMs / 60000)}m > 60m).`);
+        console.log(`[DEBUG] Sliding refresh triggered for user ${userId} on ${formatHostForLog(trustedInstanceHost)} (Token age: ${Math.round(tokenAgeMs / 60000)}m > 60m).`);
         refreshChallenge(targetSdk, trustedInstanceHost, userId).catch((err) => {
-          console.error(`[Sliding Refresh Error] Failed to asynchronously refresh challenge for user ${userId} on ${trustedInstanceHost}:`, err);
+          console.error(`[Sliding Refresh Error] Failed to asynchronously refresh challenge for user ${userId} on ${formatHostForLog(trustedInstanceHost)}:`, err);
         });
       }
     }
@@ -220,7 +219,7 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
       return;
     }
 
-    console.log(`[${new Date().toISOString()}] Action: "${action}" triggered by authenticated user: ${userId} on ${trustedInstanceHost} (authMode: ${authMode || 'server_proxy'})`);
+    console.log(`[${new Date().toISOString()}] Action: "${action}" triggered by authenticated user: ${userId} on ${formatHostForLog(trustedInstanceHost)} (authMode: ${authMode || 'server_proxy'})`);
 
     const handler = actionRegistry.get(action);
     if (!handler) {
@@ -228,7 +227,7 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
       return;
     }
 
-    const requestSdk = wrapLookerSDKWithLogging(targetSdk, { userId, action });
+    const requestSdk = wrapLookerSDKWithLogging(targetSdk, { instanceHost: trustedInstanceHost, userId, action });
 
     try {
       const actionContext = { instanceHost: trustedInstanceHost };

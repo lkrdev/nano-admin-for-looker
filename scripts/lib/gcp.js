@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const { computeBuildHash } = require('../generate-hash');
 
 function sanitizeHostForSecret(host) {
-  const cleanHost = (host || '').trim().toLowerCase();
+  const cleanHost = (host || '').trim().toLowerCase().replace(/:\d+$/, '');
   let sanitized = cleanHost.replace(/[^a-z0-9]/g, '_');
   if (sanitized.length > 180) {
     const hash = crypto.createHash('sha256').update(cleanHost).digest('hex').substring(0, 16);
