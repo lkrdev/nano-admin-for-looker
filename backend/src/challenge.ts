@@ -118,10 +118,17 @@ export function verifyChallengeToken(instanceHost: string, userId: string, token
   }
 }
 
-let challengeAttributeId: string | null = null;
+const challengeAttributeIdByHost = new Map<string, string>();
 
-export async function getChallengeAttributeId(sdk: any): Promise<string | null> {
-  if (challengeAttributeId) return challengeAttributeId;
+export function clearChallengeAttributeIdCache(): void {
+  challengeAttributeIdByHost.clear();
+}
+
+export async function getChallengeAttributeId(sdk: any, instanceHost?: string): Promise<string | null> {
+  const cacheKey = (instanceHost || '').trim().toLowerCase();
+  if (cacheKey && challengeAttributeIdByHost.has(cacheKey)) {
+    return challengeAttributeIdByHost.get(cacheKey) || null;
+  }
   if (!sdk) return null;
   try {
     const attrs = await sdk.ok(sdk.all_user_attributes({ fields: 'id,name' }));
@@ -135,22 +142,25 @@ export async function getChallengeAttributeId(sdk: any): Promise<string | null> 
       try {
         const fullAttr = await sdk.ok(sdk.user_attribute(attr.id));
         if (!fullAttr.value_is_hidden) {
-          console.warn(`⚠️ Security warning: Looker User Attribute "${fullAttr.name}" is NOT marked as hidden!`);
+          console.warn(`⚠️ Security warning: Looker User Attribute "${fullAttr.name}" on ${cacheKey || 'instance'} is NOT marked as hidden!`);
         }
         if (!fullAttr.hidden_value_domain_whitelist) {
-          console.warn(`⚠️ Security warning: Looker User Attribute "${fullAttr.name}" does NOT have a domain whitelist configured!`);
+          console.warn(`⚠️ Security warning: Looker User Attribute "${fullAttr.name}" on ${cacheKey || 'instance'} does NOT have a domain whitelist configured!`);
         } else {
-          console.log(`ℹ️ Looker User Attribute "${fullAttr.name}" is configured with domain whitelist: ${fullAttr.hidden_value_domain_whitelist}`);
+          console.log(`ℹ️ Looker User Attribute "${fullAttr.name}" on ${cacheKey || 'instance'} is configured with domain whitelist: ${fullAttr.hidden_value_domain_whitelist}`);
         }
       } catch (err) {
-        console.warn('Failed to verify user attribute security properties:', err);
+        console.warn(`Failed to verify user attribute security properties on ${cacheKey || 'instance'}:`, err);
       }
 
-      challengeAttributeId = String(attr.id);
-      return challengeAttributeId;
+      const resolvedId = String(attr.id);
+      if (cacheKey) {
+        challengeAttributeIdByHost.set(cacheKey, resolvedId);
+      }
+      return resolvedId;
     }
   } catch (err) {
-    console.error('Failed to find user attribute ID by name:', err);
+    console.error(`Failed to find user attribute ID by name on ${cacheKey || 'instance'}:`, err);
   }
   return null;
 }
@@ -159,12 +169,12 @@ export async function refreshChallenge(sdk: any, instanceHost: string, userId: s
   const newChallenge = generateChallengeToken(instanceHost, userId);
   console.log(`[DEBUG] refreshChallenge: Generated new challenge for user ${userId} on ${instanceHost}. SHA256: ${hashForLog(newChallenge)}`);
   if (sdk) {
-    const attrId = await getChallengeAttributeId(sdk);
+    const attrId = await getChallengeAttributeId(sdk, instanceHost);
     if (attrId) {
       console.log(`[DEBUG] refreshChallenge: Setting nano_admin_challenge attribute (ID: ${attrId}) for user ${userId} on ${instanceHost}.`);
       await sdk.ok(sdk.set_user_attribute_user_value(userId, attrId, { value: newChallenge }));
     } else {
-      console.error('nano_admin_challenge user attribute ID not found on Looker instance.');
+      console.error(`nano_admin_challenge user attribute ID not found on Looker instance: ${instanceHost}.`);
     }
   }
   return newChallenge;

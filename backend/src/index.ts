@@ -84,14 +84,15 @@ function getSDKForInstance(trustedHost?: string): any {
   return sdkInstance;
 }
 
-// Sliding refresh cooldown map (userId -> lastRefreshTimestamp)
+// Sliding refresh cooldown map (instanceHost_userId -> lastRefreshTimestamp)
 const slidingRefreshCooldowns = new Map<string, number>();
 
-function checkSlidingRefreshCooldown(userId: string): boolean {
+function checkSlidingRefreshCooldown(instanceHost: string, userId: string): boolean {
+  const cooldownKey = `${instanceHost.trim().toLowerCase()}_${userId}`;
   const now = Date.now();
-  const lastRefresh = slidingRefreshCooldowns.get(userId) || 0;
+  const lastRefresh = slidingRefreshCooldowns.get(cooldownKey) || 0;
   if (now - lastRefresh > 5 * 60 * 1000) { // 5-minute cooldown
-    slidingRefreshCooldowns.set(userId, now);
+    slidingRefreshCooldowns.set(cooldownKey, now);
     return true;
   }
   return false;
@@ -204,7 +205,7 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
     // Status is 'valid': Perform asynchronous sliding refresh if challenge token is older than 1 hour
     const SLIDING_REFRESH_THRESHOLD_MS = 1 * 60 * 60 * 1000; // 1 hour
     if (authMode !== 'oauth' && tokenAgeMs !== undefined && tokenAgeMs > SLIDING_REFRESH_THRESHOLD_MS) {
-      if (checkSlidingRefreshCooldown(userId)) {
+      if (checkSlidingRefreshCooldown(trustedInstanceHost, userId)) {
         console.log(`[DEBUG] Sliding refresh triggered for user ${userId} on ${trustedInstanceHost} (Token age: ${Math.round(tokenAgeMs / 60000)}m > 60m).`);
         refreshChallenge(targetSdk, trustedInstanceHost, userId).catch((err) => {
           console.error(`[Sliding Refresh Error] Failed to asynchronously refresh challenge for user ${userId} on ${trustedInstanceHost}:`, err);

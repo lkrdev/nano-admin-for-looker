@@ -4,6 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveAuthorizedGroups, isUserAuthorized, clearWorkflowCache, setCachedWorkflows } from '../auth_utils';
 import { isHostAllowed, authenticateRequest } from '../auth';
+import { getChallengeAttributeId, refreshChallenge, clearChallengeAttributeIdCache } from '../challenge';
 import { validateWorkflowsSchema } from '../actions/validate_dev_index';
 // @ts-ignore
 const { resolveAllowedInstances } = require('../../../scripts/lib/gcp');
@@ -183,4 +184,59 @@ test('resolveAllowedInstances — generates comma-separated list from config', (
   assert.ok(resolved.includes('prod.looker.app'));
   assert.ok(resolved.includes('custom.looker.app'));
   assert.ok(resolved.includes('custom.looker.app:8443'));
+});
+
+test('getChallengeAttributeId & refreshChallenge — caches user attribute ID per instanceHost without cross-instance pollution', async () => {
+  clearChallengeAttributeIdCache();
+
+  const updatedCalls: Array<{ host: string; userId: string; attrId: string; value: string }> = [];
+
+  function createMockSdk(host: string, attrId: string) {
+    let lookupCount = 0;
+    return {
+      getLookupCount: () => lookupCount,
+      ok: async (val: any) => await val,
+      all_user_attributes: async () => {
+        lookupCount++;
+        return [{ id: attrId, name: 'nano_admin_admin_extension_nano_admin_challenge' }];
+      },
+      user_attribute: async (id: string) => ({
+        id,
+        name: 'nano_admin_admin_extension_nano_admin_challenge',
+        value_is_hidden: true,
+        hidden_value_domain_whitelist: 'https://backend.example.run.app'
+      }),
+      set_user_attribute_user_value: async (userId: string, id: string, body: { value: string }) => {
+        updatedCalls.push({ host, userId, attrId: id, value: body.value });
+        return {};
+      }
+    };
+  }
+
+  const sdkLatam = createMockSdk('demolatam.cloud.looker.com', '20');
+  const sdkEmea = createMockSdk('demoemea.cloud.looker.com', '27');
+
+  // 1. First request on demolatam resolves and sets attribute ID 20
+  await refreshChallenge(sdkLatam, 'demolatam.cloud.looker.com', '1762');
+  assert.equal(sdkLatam.getLookupCount(), 1);
+  assert.equal(updatedCalls.length, 1);
+  assert.equal(updatedCalls[0].host, 'demolatam.cloud.looker.com');
+  assert.equal(updatedCalls[0].attrId, '20');
+
+  // 2. Subsequent request on demoemea resolves and sets its own attribute ID 27 (not 20)
+  await refreshChallenge(sdkEmea, 'demoemea.cloud.looker.com', '2016');
+  assert.equal(sdkEmea.getLookupCount(), 1);
+  assert.equal(updatedCalls.length, 2);
+  assert.equal(updatedCalls[1].host, 'demoemea.cloud.looker.com');
+  assert.equal(updatedCalls[1].attrId, '27');
+
+  // 3. Second call on demolatam uses cached ID 20 without re-querying all_user_attributes
+  const cachedLatamId = await getChallengeAttributeId(sdkLatam, 'DEMOLATAM.CLOUD.LOOKER.COM');
+  assert.equal(cachedLatamId, '20');
+  assert.equal(sdkLatam.getLookupCount(), 1);
+
+  // 4. Second call on demoemea uses cached ID 27 without re-querying all_user_attributes
+  const cachedEmeaId = await getChallengeAttributeId(sdkEmea, 'demoemea.cloud.looker.com');
+  assert.equal(cachedEmeaId, '27');
+  assert.equal(sdkEmea.getLookupCount(), 1);
 });
