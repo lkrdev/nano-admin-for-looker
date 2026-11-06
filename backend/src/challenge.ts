@@ -128,19 +128,32 @@ export async function getChallengeAttributeId(sdk: LookerBackendSDK | any, insta
     );
     if (attr) {
       const logHost = formatHostForLog(cacheKey) || 'instance';
-      // Pull attribute's domain whitelist and value_is_hidden to verify security
-      try {
-        const fullAttr = await sdk.ok(sdk.user_attribute(attr.id));
-        if (!fullAttr.value_is_hidden) {
-          console.warn(`⚠️ Security warning: Looker User Attribute "${fullAttr.name}" on ${logHost} is NOT marked as hidden!`);
-        }
-        if (!fullAttr.hidden_value_domain_whitelist) {
-          console.warn(`⚠️ Security warning: Looker User Attribute "${fullAttr.name}" on ${logHost} does NOT have a domain whitelist configured!`);
+      // Pull attribute's domain whitelist and value_is_hidden to verify and enforce security
+      const fullAttr = await sdk.ok(sdk.user_attribute(attr.id));
+      if (!fullAttr.value_is_hidden) {
+        console.warn(`⚠️ Security warning: Looker User Attribute "${fullAttr.name}" on ${logHost} is NOT marked as hidden! Enforcing value_is_hidden: true...`);
+        if (typeof sdk.update_user_attribute === 'function') {
+          const updatedAttr = await sdk.ok(
+            sdk.update_user_attribute(attr.id, {
+              name: fullAttr.name,
+              label: fullAttr.label || 'Nano Admin Challenge',
+              type: fullAttr.type || 'string',
+              value_is_hidden: true,
+              user_can_edit: false,
+              hidden_value_domain_whitelist: fullAttr.hidden_value_domain_whitelist
+            })
+          );
+          if (!updatedAttr?.value_is_hidden) {
+            throw new Error(`Security error: Failed to enforce value_is_hidden=true on user attribute "${fullAttr.name}". Refusing to write challenge token.`);
+          }
         } else {
-          console.log(`ℹ️ Looker User Attribute "${fullAttr.name}" on ${logHost} is configured with domain whitelist: ${fullAttr.hidden_value_domain_whitelist}`);
+          throw new Error(`Security error: Looker User Attribute "${fullAttr.name}" on ${logHost} is not marked as hidden and cannot be updated.`);
         }
-      } catch (err) {
-        console.warn(`Failed to verify user attribute security properties on ${logHost}:`, err);
+      }
+      if (!fullAttr.hidden_value_domain_whitelist) {
+        console.warn(`⚠️ Security warning: Looker User Attribute "${fullAttr.name}" on ${logHost} does NOT have a domain whitelist configured!`);
+      } else {
+        console.log(`ℹ️ Looker User Attribute "${fullAttr.name}" on ${logHost} is configured with domain whitelist: ${fullAttr.hidden_value_domain_whitelist}`);
       }
 
       const resolvedId = String(attr.id);
@@ -149,8 +162,11 @@ export async function getChallengeAttributeId(sdk: LookerBackendSDK | any, insta
       }
       return resolvedId;
     }
-  } catch (err) {
+  } catch (err: any) {
     console.error(`Failed to find user attribute ID by name on ${formatHostForLog(cacheKey) || 'instance'}:`, err);
+    if (err instanceof Error && err.message.startsWith('Security error:')) {
+      throw err;
+    }
   }
   return null;
 }

@@ -84,3 +84,42 @@ workflows:
     parameters:
       default_attribute_name: "nano_admin_is_workflow_scope_group"
 
+  - id: "team-user-management"
+    label: "Team User Management"
+    description: "Comprehensive delegated administration of users, scope groups, roles, attributes, folder access, and schedules."
+    template: "user-management"
+    authorized_groups:
+      - "1"
+      - "3"
+    parameters:
+      user_id_limitation:
+        mode: "scope_groups"
+        attribute_name: "nano_admin_is_workflow_scope_group"
+      profile:
+        allow_create: true
+        allow_update_name: true
+        allow_update_email: false
+        allow_disable: true
+        allow_delete: false
+      groups:
+        allow_view: true
+        allow_edit: true
+      roles:
+        allow_view: true
+        allow_edit: true
+      user_attributes:
+        allow_view: true
+        allow_edit: true
+      folder_access:
+        allow_view: true
+        allow_edit: true
+      credentials:
+        allow_password_reset: true
+        allow_email_credentials: true
+        allow_totp_reset: true
+        allow_revoke_sessions: true
+      telemetry:
+        allow_view_metrics: true
+        allow_manage_schedules: true
+
+

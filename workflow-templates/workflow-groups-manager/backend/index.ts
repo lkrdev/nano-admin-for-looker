@@ -1,5 +1,9 @@
 import { getWorkflows, resolveAuthorizedGroups } from '../../../auth_utils';
 import { LookerBackendSDK } from '../../../looker_logging_sdk';
+import {
+  inspectGroupHierarchyForScopeGroups,
+  inspectPrivilegedScopeGroupMembers
+} from './audit_warnings';
 
 export interface WorkflowContext {
   sdk: LookerBackendSDK | any;
@@ -80,12 +84,17 @@ async function executeGroupsAudit(sdk: any, defaultAttributeName: string, instan
   const allReferencedAuthGroupIdsSet = new Set<string>();
 
   for (const wf of workflows) {
-    if (wf.template === 'limited-system-activity' || wf.parameters?.user_id_limitation) {
+    if (
+      wf.template === 'limited-system-activity' ||
+      wf.template === 'user-management' ||
+      wf.parameters?.user_id_limitation
+    ) {
       compatibleWorkflows.push(wf);
       const limitation = wf.parameters?.user_id_limitation;
-      if (limitation?.mode === 'scope_groups' || limitation?.mode === 'tenant_groups') {
+      const effectiveMode = limitation?.mode || (wf.template === 'user-management' ? 'scope_groups' : undefined);
+      if (effectiveMode === 'scope_groups' || effectiveMode === 'tenant_groups') {
         scopeWorkflows.push(wf);
-        if (limitation.attribute_name) {
+        if (limitation?.attribute_name) {
           scopeAttributeNamesSet.add(limitation.attribute_name.trim());
         }
       }
@@ -104,7 +113,7 @@ async function executeGroupsAudit(sdk: any, defaultAttributeName: string, instan
   const [allAttributes, allGroups, allUsers] = await Promise.all([
     sdk.ok(sdk.all_user_attributes({})),
     sdk.ok(sdk.all_groups({ fields: 'id,name' })),
-    sdk.ok(sdk.all_users({ fields: 'id,first_name,last_name,email,display_name,is_disabled', limit: 1000 }))
+    sdk.ok(sdk.all_users({ fields: 'id,first_name,last_name,email,display_name,is_disabled,is_service_account,role_ids', limit: 1000 }))
   ]);
 
   const groupsMap = new Map<string, any>();
@@ -128,7 +137,7 @@ async function executeGroupsAudit(sdk: any, defaultAttributeName: string, instan
     const usedByWorkflows = workflows.filter((wf: any) => {
       const lim = wf.parameters?.user_id_limitation;
       if (!lim) {
-        return attrName === defaultAttributeName && wf.template === 'limited-system-activity';
+        return attrName === defaultAttributeName && (wf.template === 'limited-system-activity' || wf.template === 'user-management');
       }
       const wfAttr = (lim.attribute_name || defaultAttributeName).trim();
       return wfAttr === attrName;
@@ -350,18 +359,60 @@ async function executeGroupsAudit(sdk: any, defaultAttributeName: string, instan
     return String(a.workflow_label).localeCompare(String(b.workflow_label));
   });
 
-  // 7. Evaluate Scope Group Health Checks Matrix (6 Scope Checks)
+  // 6b. Inspect Subgroup Depth (> 1 hop) and Privileged Accounts in Scope Groups
+  const activeScopeGroupsFlat: Array<{
+    group_id: string;
+    group_name: string;
+    attribute_name: string;
+    users: Array<{ id: string; name: string; email: string }>;
+  }> = [];
+
+  for (const attrAudit of scopeAttributeAudits) {
+    for (const tg of attrAudit.tagged_groups || []) {
+      if (tg.is_active_scope) {
+        activeScopeGroupsFlat.push({
+          group_id: tg.group_id,
+          group_name: tg.group_name,
+          attribute_name: attrAudit.attribute_name,
+          users: tg.users || []
+        });
+      }
+    }
+  }
+
+  const { hierarchyByGroupId, deepSubgroupWarnings } = await inspectGroupHierarchyForScopeGroups(
+    sdk,
+    activeScopeGroupsFlat,
+    groupsMap
+  );
+
+  for (const attrAudit of scopeAttributeAudits) {
+    for (const tg of attrAudit.tagged_groups || []) {
+      const hInfo = hierarchyByGroupId.get(String(tg.group_id));
+      tg.max_subgroup_depth = hInfo ? hInfo.max_depth : 0;
+      tg.subgroups = hInfo ? hInfo.subgroups : [];
+    }
+  }
+
+  const { userMutationWorkflows, privilegedScopeMembers } = await inspectPrivilegedScopeGroupMembers(
+    sdk,
+    workflows,
+    activeScopeGroupsFlat,
+    usersMap
+  );
+
+  // 7. Evaluate Scope Group Health Checks Matrix
   const missingAttributes = scopeAttributeAudits.filter(a => !a.exists).map(a => a.attribute_name);
 
-  const healthChecks = [
+  const healthChecks: any[] = [
     {
       id: 'no_compatible_templates',
       title: 'Compatible Workflows in index.md',
       passed: compatibleWorkflows.length > 0,
       description: compatibleWorkflows.length > 0
         ? `Found ${compatibleWorkflows.length} workflow(s) supporting scope groups.`
-        : 'No workflows defined in index.md of a template type that supports scope groups (e.g. limited-system-activity).',
-      recommendation: 'Add a workflow of template type "limited-system-activity" to index.md.'
+        : 'No workflows defined in index.md of a template type that supports scope groups (e.g. limited-system-activity, user-management).',
+      recommendation: 'Add a workflow of template type "limited-system-activity" or "user-management" to index.md.'
     },
     {
       id: 'no_scope_workflows',
@@ -408,6 +459,24 @@ async function executeGroupsAudit(sdk: any, defaultAttributeName: string, instan
         ? `${totalUsersInScopeGroups} user(s) belong to active scope groups.`
         : 'Active scope groups exist, but zero users are assigned as members.',
       recommendation: 'Add user accounts to your active scope groups.'
+    },
+    {
+      id: 'deep_subgroup_hierarchy',
+      title: 'Scope Group Subgroup Depth (<= 1 Level)',
+      passed: deepSubgroupWarnings.length === 0,
+      description: deepSubgroupWarnings.length === 0
+        ? 'All active scope groups have at most 1 level of nested child groups.'
+        : `${deepSubgroupWarnings.length} active scope group(s) have more than 1 level of nested subgroup depth (max depth: ${Math.max(...deepSubgroupWarnings.map(w => w.max_depth))}).`,
+      recommendation: 'Flatten nested subgroups under active scope groups in Looker Groups Admin to simplify delegated group management.'
+    },
+    {
+      id: 'privileged_accounts_in_scope_groups',
+      title: 'No Admin or Service Accounts in Mutating Scope Groups',
+      passed: privilegedScopeMembers.length === 0,
+      description: privilegedScopeMembers.length === 0
+        ? 'No Looker Admin or Service Account users belong to active scope groups exposed to user mutation workflows.'
+        : `${privilegedScopeMembers.length} Looker Admin or Service Account membership(s) found inside active scope groups while user mutation workflows (${userMutationWorkflows.map(w => w.label).join(', ')}) are enabled.`,
+      recommendation: 'Remove Looker Admin and Service Account users from active scope groups so delegated user admins cannot modify or reset their accounts.'
     }
   ];
 
@@ -417,6 +486,9 @@ async function executeGroupsAudit(sdk: any, defaultAttributeName: string, instan
     health_checks: healthChecks,
     scope_attributes: scopeAttributeAudits,
     user_misconfigurations: userMisconfigurations,
+    deep_subgroup_warnings: deepSubgroupWarnings,
+    privileged_scope_members: privilegedScopeMembers,
+    user_mutation_workflows: userMutationWorkflows,
     user_scope_distribution: {
       total_active_users: activeUsers.length,
       unscoped_count: bucket0.length,

@@ -1,0 +1,165 @@
+{
+  "name": "User Management Workflow Template",
+  "description": "Comprehensive delegated user administration covering user profile lifecycle, group memberships, role assignments, user attributes, folder access, credentials/sessions, and user-scoped telemetry & schedules.",
+  "version": "1.0.0",
+  "mount_type": "page",
+  "parameters": {
+    "user_id_limitation": {
+      "type": "object",
+      "description": "Limitation enforcing user ID scoping across all user management operations",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "scope_groups",
+            "self",
+            "none"
+          ],
+          "default": "scope_groups",
+          "description": "'scope_groups' (default) restricts to users in the invoking admin's active Scope Groups; 'self' restricts to the invoking user; 'none' applies no user ID scoping"
+        },
+        "attribute_name": {
+          "type": "string",
+          "default": "nano_admin_is_workflow_scope_group",
+          "description": "User attribute name set on Looker Groups for Scope Group matching"
+        }
+      }
+    },
+    "profile": {
+      "type": "object",
+      "description": "Controls for core user profile lifecycle and account status mutations",
+      "properties": {
+        "allow_create": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_update_name": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_update_email": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_disable": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_delete": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "credentials": {
+      "type": "object",
+      "description": "Controls for email credentials, password reset emails, 2FA/TOTP resets, and session revocation (API3 credentials are never exposed)",
+      "properties": {
+        "allow_email_credentials": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_password_reset": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_totp_reset": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_session_revoke": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "groups": {
+      "type": "object",
+      "description": "Controls for viewing and editing group memberships within the admin's active Scope Groups and their descendant subgroups",
+      "properties": {
+        "allow_view": {
+          "type": "boolean",
+          "default": true
+        },
+        "allow_edit": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "roles": {
+      "type": "object",
+      "description": "Controls for viewing effective roles and assigning direct user roles bounded by the invoking admin's effective permissions/models",
+      "properties": {
+        "allow_view": {
+          "type": "boolean",
+          "default": true
+        },
+        "allow_edit": {
+          "type": "boolean",
+          "default": false
+        },
+        "allowed_role_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "user_attributes": {
+      "type": "object",
+      "description": "Controls for viewing and setting user-level attribute overrides with allowed/blocked lists and value rules",
+      "properties": {
+        "allow_view": {
+          "type": "boolean",
+          "default": true
+        },
+        "allow_edit": {
+          "type": "boolean",
+          "default": false
+        },
+        "blocked_attributes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "allowed_attributes": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "folder_access": {
+      "type": "object",
+      "description": "Controls for viewing and granting/revoking user folder access on folders accessible to the admin's Scope Groups",
+      "properties": {
+        "allow_view": {
+          "type": "boolean",
+          "default": true
+        },
+        "allow_edit": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "description": "Controls for viewing per-user query/schedule/CA/folder telemetry and managing user scheduled plans",
+      "properties": {
+        "allow_view_metrics": {
+          "type": "boolean",
+          "default": true
+        },
+        "allow_manage_schedules": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    }
+  }
+}

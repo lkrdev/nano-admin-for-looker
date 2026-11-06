@@ -66,6 +66,12 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
   };
 
   const userMisconfigurations = auditData?.user_misconfigurations || [];
+  const deepSubgroupWarnings = auditData?.deep_subgroup_warnings || [];
+  const privilegedScopeMembers = auditData?.privileged_scope_members || [];
+  const hasScopeTabAlerts =
+    userMisconfigurations.length > 0 ||
+    deepSubgroupWarnings.length > 0 ||
+    privilegedScopeMembers.length > 0;
 
   const allAvailableUsers = useMemo(() => {
     const list0 = userDistribution.bucket_0 || [];
@@ -147,7 +153,7 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
           onClick={handleTabScopeAudit}
           style={getTabStyle(activeTab === 'scope_audit')}
         >
-          Scope Groups {userMisconfigurations.length > 0 && <span style={{ ...badgeStyle, background: '#dc2626' }}>!</span>}
+          Scope Groups {hasScopeTabAlerts && <span style={{ ...badgeStyle, background: '#dc2626' }}>!</span>}
         </button>
         <button
           onClick={handleTabAccessMatrix}
@@ -342,6 +348,67 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                       style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #dc2626', background: '#fff', color: '#dc2626', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}
                     >
                       Remove Override
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Deep Subgroup Hierarchy Warning (> 1 level of nested subgroups) */}
+          {deepSubgroupWarnings.length > 0 && (
+            <div style={{ padding: '16px 20px', borderRadius: '8px', background: '#fffbeb', border: '1px solid #fde68a', marginBottom: '24px' }}>
+              <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#92400e' }}>
+                Warning: Deep Subgroup Hierarchy Detected (&gt; 1 Hop)
+              </h3>
+              <p style={{ margin: '4px 0 12px 0', fontSize: '13px', color: '#78350f' }}>
+                The following active Scope Group(s) contain nested subgroups more than 1 level deep. Deep subgroup nesting increases complexity when delegated admins manage group memberships.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {deepSubgroupWarnings.map((warn: any) => (
+                  <div key={`${warn.group_id}-${warn.attribute_name}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#ffffff', padding: '8px 12px', borderRadius: '6px', border: '1px solid #fcd34d' }}>
+                    <span style={{ fontSize: '12px', color: '#334155' }}>
+                      <strong>{warn.group_name}</strong> (ID: <code>{warn.group_id}</code>, Attribute: <code>{warn.attribute_name}</code>) — Max Subgroup Depth: <strong>{warn.max_depth}</strong> ({(warn.deep_subgroups || []).map((sg: any) => `${sg.group_name} [depth ${sg.depth}]`).join(', ')})
+                    </span>
+                    <a
+                      href={hostOrigin ? `${hostOrigin}/admin/groups/${warn.group_id}` : `/admin/groups/${warn.group_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => navigateToLookerPath(`/admin/groups/${warn.group_id}`, e)}
+                      style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #d97706', background: '#fff', color: '#b45309', fontSize: '11px', fontWeight: 600, textDecoration: 'none' }}
+                    >
+                      Inspect in Looker Groups
+                    </a>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Privileged Accounts (Admin / Service Account) in Scope Groups Warning */}
+          {privilegedScopeMembers.length > 0 && (
+            <div style={{ padding: '16px 20px', borderRadius: '8px', background: '#fff1f2', border: '1px solid #fecdd3', marginBottom: '24px' }}>
+              <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#9f1239' }}>
+                Security Warning: Admin or Service Account Members in Active Scope Groups
+              </h3>
+              <p style={{ margin: '4px 0 12px 0', fontSize: '13px', color: '#881337' }}>
+                User mutation workflows are enabled while Looker Admin or Service Account users belong to active Scope Groups. Delegated user administrators in those Scope Groups could modify or disable these high-privilege accounts.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {privilegedScopeMembers.map((item: any) => (
+                  <div key={`${item.group_id}-${item.user_id}-${item.attribute_name}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#ffffff', padding: '8px 12px', borderRadius: '6px', border: '1px solid #fda4af' }}>
+                    <span style={{ fontSize: '12px', color: '#334155' }}>
+                      <strong>{item.user_name}</strong> ({item.user_email || `ID: ${item.user_id}`})
+                      {item.is_admin && <span style={{ marginLeft: '6px', padding: '1px 6px', borderRadius: '4px', background: '#fee2e2', color: '#991b1b', fontSize: '10px', fontWeight: 700 }}>ADMIN</span>}
+                      {item.is_service_account && <span style={{ marginLeft: '6px', padding: '1px 6px', borderRadius: '4px', background: '#fef3c7', color: '#92400e', fontSize: '10px', fontWeight: 700 }}>SERVICE ACCOUNT</span>}
+                      {' '}in Scope Group <strong>{item.group_name}</strong> (<code>{item.attribute_name}</code>)
+                    </span>
+                    <button
+                      onClick={() => handleRemovePrivilegedMemberFromGroup(item.group_id, item.user_id)}
+                      disabled={actionLoading}
+                      style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #dc2626', background: '#fff', color: '#dc2626', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}
+                    >
+                      Remove from Scope Group
                     </button>
                   </div>
                 ))}
@@ -901,6 +968,25 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
           </div>
         );
 
+      case 'deep_subgroup_hierarchy':
+      case 'privileged_accounts_in_scope_groups':
+        return (
+          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+            <button onClick={handleTabScopeAudit} style={buttonStyle}>
+              Review Scope Groups
+            </button>
+            <a
+              href={groupsHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => navigateToLookerPath('/admin/groups', e)}
+              style={secondaryBtnLinkStyle}
+            >
+              Looker Groups Admin
+            </a>
+          </div>
+        );
+
       default:
         return null;
     }
@@ -972,6 +1058,14 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
     callBackend('remove_user_attribute_override', { user_id: userId, attribute_id: attributeId })
       .then(() => handleFetchAudit())
       .catch((err) => setErrorMsg(err.message || 'Failed to remove user override.'))
+      .finally(() => setActionLoading(false));
+  }
+
+  function handleRemovePrivilegedMemberFromGroup(groupId: string, userId: string) {
+    setActionLoading(true);
+    callBackend('manage_group_members', { group_id: groupId, user_id: userId, operation: 'remove' })
+      .then(() => handleFetchAudit())
+      .catch((err) => setErrorMsg(err.message || 'Failed to remove user from scope group.'))
       .finally(() => setActionLoading(false));
   }
 

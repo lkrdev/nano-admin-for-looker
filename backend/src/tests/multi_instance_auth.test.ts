@@ -7,6 +7,10 @@ import { isHostAllowed, authenticateRequest } from '../auth';
 import { getChallengeAttributeId, refreshChallenge, clearChallengeAttributeIdCache } from '../challenge';
 import { validateWorkflowsSchema } from '../actions/validate_dev_index';
 import { formatHostForLog, wrapLookerSDKWithLogging } from '../looker_logging_sdk';
+import {
+  inspectGroupHierarchyForScopeGroups,
+  inspectPrivilegedScopeGroupMembers
+} from '../workflow-templates/workflow-groups-manager/backend/audit_warnings';
 // @ts-ignore
 const { resolveAllowedInstances, sanitizeHostForSecret: gcpSanitizeHostForSecret } = require('../../../scripts/lib/gcp');
 
@@ -308,3 +312,120 @@ test('gcp.sanitizeHostForSecret — consistently strips port for secret lookup',
   assert.equal(gcpSanitizeHostForSecret('custom.looker.app:8443'), 'custom_looker_app');
   assert.equal(gcpSanitizeHostForSecret('custom.looker.app'), 'custom_looker_app');
 });
+
+test('getChallengeAttributeId — enforces value_is_hidden: true and auto-remediates or throws if unhideable', async () => {
+  clearChallengeAttributeIdCache();
+  let updatedHiddenFlag = false;
+
+  const sdkAutoRemediate: any = {
+    ok: async (val: any) => await val,
+    all_user_attributes: async () => [{ id: '88', name: 'nano_admin_challenge' }],
+    user_attribute: async () => ({
+      id: '88',
+      name: 'nano_admin_challenge',
+      value_is_hidden: false,
+      hidden_value_domain_whitelist: 'https://backend.example.run.app'
+    }),
+    update_user_attribute: async (_id: string, body: any) => {
+      if (body.value_is_hidden === true) {
+        updatedHiddenFlag = true;
+      }
+      return { id: '88', name: 'nano_admin_challenge', value_is_hidden: true };
+    }
+  };
+
+  const resolvedId = await getChallengeAttributeId(sdkAutoRemediate, 'unhidden.looker.app');
+  assert.equal(resolvedId, '88');
+  assert.equal(updatedHiddenFlag, true);
+
+  // If update_user_attribute fails to set value_is_hidden: true, must refuse to proceed
+  clearChallengeAttributeIdCache();
+  const sdkCannotHide: any = {
+    ok: async (val: any) => await val,
+    all_user_attributes: async () => [{ id: '89', name: 'nano_admin_challenge' }],
+    user_attribute: async () => ({
+      id: '89',
+      name: 'nano_admin_challenge',
+      value_is_hidden: false
+    }),
+    update_user_attribute: async () => ({
+      id: '89',
+      name: 'nano_admin_challenge',
+      value_is_hidden: false
+    })
+  };
+
+  await assert.rejects(
+    async () => await getChallengeAttributeId(sdkCannotHide, 'failhide.looker.app'),
+    /Security error: Failed to enforce value_is_hidden=true/i
+  );
+});
+
+test('workflow-groups-manager audit_warnings — detects deep (>1 level) subgroup hierarchy and privileged accounts in Scope Groups', async () => {
+  const mockSdk: any = {
+    ok: async (val: any) => await val,
+    search_groups_with_hierarchy: async () => [
+      { id: '10', name: 'Scope Group A', parent_group_ids: [] },
+      { id: '11', name: 'Child L1', parent_group_ids: ['10'] },
+      { id: '12', name: 'Grandchild L2', parent_group_ids: ['11'] }
+    ],
+    all_roles: async () => [
+      {
+        id: 'r_admin',
+        name: 'Admin',
+        permission_set: { id: 'ps1', name: 'Admin', all_access: true, permissions: ['administer'] }
+      },
+      {
+        id: 'r_user',
+        name: 'Standard User',
+        permission_set: { id: 'ps2', name: 'User', all_access: false, permissions: ['access_data'] }
+      }
+    ]
+  };
+
+  const groupsMap = new Map<string, any>([
+    ['10', { id: '10', name: 'Scope Group A' }],
+    ['11', { id: '11', name: 'Child L1' }],
+    ['12', { id: '12', name: 'Grandchild L2' }]
+  ]);
+
+  const activeScopeGroups = [
+    { group_id: '10', group_name: 'Scope Group A', attribute_name: 'nano_admin_is_workflow_scope_group' }
+  ];
+
+  const hierarchyRes = await inspectGroupHierarchyForScopeGroups(mockSdk, activeScopeGroups, groupsMap);
+  assert.equal(hierarchyRes.deepSubgroupWarnings.length, 1);
+  assert.equal(hierarchyRes.deepSubgroupWarnings[0].group_id, '10');
+  assert.equal(hierarchyRes.deepSubgroupWarnings[0].max_depth, 2);
+
+  const workflows = [
+    { id: 'um-wf', label: 'User Mgmt', template: 'user-management', parameters: {} }
+  ];
+  const activeScopeGroupsWithUsers = [
+    {
+      group_id: '10',
+      group_name: 'Scope Group A',
+      attribute_name: 'nano_admin_is_workflow_scope_group',
+      users: [
+        { id: '1', name: 'Super Admin', email: 'admin@example.com' },
+        { id: '2', name: 'Automation Bot', email: 'bot@example.com' }
+      ]
+    }
+  ];
+  const usersMap = new Map<string, any>([
+    ['1', { id: '1', role_ids: ['r_admin'], is_service_account: false }],
+    ['2', { id: '2', role_ids: ['r_user'], is_service_account: true }]
+  ]);
+
+  const privRes = await inspectPrivilegedScopeGroupMembers(
+    mockSdk,
+    workflows,
+    activeScopeGroupsWithUsers,
+    usersMap
+  );
+  assert.equal(privRes.userMutationWorkflows.length, 1);
+  assert.equal(privRes.privilegedScopeMembers.length, 2);
+  assert.ok(privRes.privilegedScopeMembers.some((m) => m.user_id === '1' && m.is_admin));
+  assert.ok(privRes.privilegedScopeMembers.some((m) => m.user_id === '2' && m.is_service_account));
+});
+
