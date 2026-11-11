@@ -128,6 +128,9 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
   const [validatingDev, setValidatingDev] = useState<boolean>(false);
   const [devValidationResult, setDevValidationResult] = useState<any | null>(null);
   const [showValidationModal, setShowValidationModal] = useState<boolean>(false);
+  const [manualDevIndexContent, setManualDevIndexContent] = useState<string>('');
+  const [showManualDevIndexInput, setShowManualDevIndexInput] = useState<boolean>(false);
+  const [devFetchNotice, setDevFetchNotice] = useState<string | null>(null);
   const [oauthRequired, setOauthRequired] = useState<boolean>(false);
   const [oauthAuthenticating, setOauthAuthenticating] = useState<boolean>(false);
   const [oauthError, setOauthError] = useState<string | null>(null);
@@ -655,101 +658,141 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
               </button>
             </div>
 
-            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px', maxHeight: '78vh', overflowY: 'auto' }}>
               {validatingDev ? (
                 <div style={{ padding: '32px 0', textAlign: 'center', color: '#64748b' }}>
                   <div className="spinner" style={{ margin: '0 auto 12px auto' }}></div>
                   <p style={{ margin: 0, fontSize: '14px' }}>
-                    Fetching and validating development version of <code>index.md</code> from Looker dev workspace...
+                    Validating <code>index.md</code>...
                   </p>
                 </div>
-              ) : devValidationResult ? (
-                devValidationResult.valid ? (
-                  <div>
-                    <div style={{
-                      background: '#f0fdf4',
-                      border: '1px solid #bbf7d0',
-                      color: '#15803d',
-                      padding: '14px 16px',
-                      borderRadius: '8px',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '10px',
-                      marginBottom: '16px'
-                    }}>
-                      <span style={{ fontSize: '20px' }}>🎉</span>
-                      <div>
-                        <strong style={{ display: 'block', fontSize: '14px' }}>Development index.md is Valid!</strong>
-                        <span style={{ fontSize: '12px' }}>
-                          Parsed {devValidationResult.workflows_count || 0} workflow definition(s) successfully without syntax or schema errors.
-                        </span>
-                      </div>
-                    </div>
-
-                    <h4 style={{ margin: '0 0 8px 0', fontSize: '13px', fontWeight: 600, color: '#334155' }}>
-                      Parsed Workflows Summary
-                    </h4>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '200px', overflowY: 'auto' }}>
-                      {(devValidationResult.workflows || []).map((wf: any, idx: number) => (
-                        <div key={idx} style={{
-                          background: '#f8fafc',
-                          border: '1px solid #e2e8f0',
+              ) : (
+                <>
+                  {showManualDevIndexInput && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                      {devFetchNotice && (
+                        <div style={{
+                          background: '#fffbeb',
+                          border: '1px solid #fde68a',
+                          color: '#92400e',
                           padding: '10px 12px',
                           borderRadius: '6px',
-                          display: 'flex',
-                          justifyContent: 'space-between',
-                          alignItems: 'center'
+                          fontSize: '12px'
                         }}>
+                          {devFetchNotice}
+                        </div>
+                      )}
+                      <label style={{ fontSize: '13px', fontWeight: 600, color: '#334155' }}>
+                        Paste <code>index.md</code> contents to validate:
+                      </label>
+                      <textarea
+                        value={manualDevIndexContent}
+                        onChange={handleManualDevIndexChange}
+                        placeholder="workflows:&#10;  - id: my-workflow&#10;    label: My Workflow&#10;    template: user-management&#10;    authorized_groups:&#10;      - '1'"
+                        rows={10}
+                        style={{
+                          width: '100%',
+                          boxSizing: 'border-box',
+                          padding: '10px 12px',
+                          borderRadius: '6px',
+                          border: '1px solid #cbd5e1',
+                          fontFamily: 'monospace',
+                          fontSize: '12px',
+                          resize: 'vertical'
+                        }}
+                      />
+                    </div>
+                  )}
+
+                  {devValidationResult && (
+                    devValidationResult.valid ? (
+                      <div>
+                        <div style={{
+                          background: '#f0fdf4',
+                          border: '1px solid #bbf7d0',
+                          color: '#15803d',
+                          padding: '14px 16px',
+                          borderRadius: '8px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '10px',
+                          marginBottom: '16px'
+                        }}>
+                          <span style={{ fontSize: '20px' }}>🎉</span>
                           <div>
-                            <strong style={{ fontSize: '13px', color: '#0f172a' }}>{wf.label}</strong>
-                            <span style={{ fontSize: '11px', color: '#64748b', display: 'block' }}>
-                              ID: <code>{wf.id}</code> | Template: <code>{wf.template}</code>
+                            <strong style={{ display: 'block', fontSize: '14px' }}>Development index.md is Valid!</strong>
+                            <span style={{ fontSize: '12px' }}>
+                              Parsed {devValidationResult.workflows_count || 0} workflow definition(s) successfully without syntax or schema errors.
                             </span>
                           </div>
-                          <span style={{ fontSize: '11px', background: '#e0f2fe', color: '#0369a1', padding: '2px 8px', borderRadius: '12px' }}>
-                            {wf.mount_type || 'card'}
-                          </span>
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div>
-                    <div style={{
-                      background: '#fef2f2',
-                      border: '1px solid #fecaca',
-                      color: '#b91c1c',
-                      padding: '14px 16px',
-                      borderRadius: '8px',
-                      display: 'flex',
-                      alignItems: 'flex-start',
-                      gap: '10px',
-                      marginBottom: '14px'
-                    }}>
-                      <span style={{ fontSize: '20px' }}>❌</span>
-                      <div>
-                        <strong style={{ display: 'block', fontSize: '14px' }}>Validation Failed</strong>
-                        <span style={{ fontSize: '12px' }}>{devValidationResult.message}</span>
-                      </div>
-                    </div>
 
-                    {devValidationResult.details && (
-                      <div style={{
-                        background: '#1f2937',
-                        color: '#f9fafb',
-                        padding: '12px 14px',
-                        borderRadius: '6px',
-                        fontFamily: 'monospace',
-                        fontSize: '12px',
-                        whiteSpace: 'pre-wrap',
-                        wordBreak: 'break-word'
-                      }}>
-                        {devValidationResult.details}
+                        <h4 style={{ margin: '0 0 8px 0', fontSize: '13px', fontWeight: 600, color: '#334155' }}>
+                          Parsed Workflows Summary
+                        </h4>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '200px', overflowY: 'auto' }}>
+                          {(devValidationResult.workflows || []).map((wf: any, idx: number) => (
+                            <div key={idx} style={{
+                              background: '#f8fafc',
+                              border: '1px solid #e2e8f0',
+                              padding: '10px 12px',
+                              borderRadius: '6px',
+                              display: 'flex',
+                              justifyContent: 'space-between',
+                              alignItems: 'center'
+                            }}>
+                              <div>
+                                <strong style={{ fontSize: '13px', color: '#0f172a' }}>{wf.label}</strong>
+                                <span style={{ fontSize: '11px', color: '#64748b', display: 'block' }}>
+                                  ID: <code>{wf.id}</code> | Template: <code>{wf.template}</code>
+                                </span>
+                              </div>
+                              <span style={{ fontSize: '11px', background: '#e0f2fe', color: '#0369a1', padding: '2px 8px', borderRadius: '12px' }}>
+                                {wf.mount_type || 'card'}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
                       </div>
-                    )}
-                  </div>
-                )
-              ) : null}
+                    ) : (
+                      <div>
+                        <div style={{
+                          background: '#fef2f2',
+                          border: '1px solid #fecaca',
+                          color: '#b91c1c',
+                          padding: '14px 16px',
+                          borderRadius: '8px',
+                          display: 'flex',
+                          alignItems: 'flex-start',
+                          gap: '10px',
+                          marginBottom: '14px'
+                        }}>
+                          <span style={{ fontSize: '20px' }}>❌</span>
+                          <div>
+                            <strong style={{ display: 'block', fontSize: '14px' }}>Validation Failed</strong>
+                            <span style={{ fontSize: '12px' }}>{devValidationResult.message}</span>
+                          </div>
+                        </div>
+
+                        {devValidationResult.details && (
+                          <div style={{
+                            background: '#1f2937',
+                            color: '#f9fafb',
+                            padding: '12px 14px',
+                            borderRadius: '6px',
+                            fontFamily: 'monospace',
+                            fontSize: '12px',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-word'
+                          }}>
+                            {devValidationResult.details}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  )}
+                </>
+              )}
             </div>
 
             <div style={{
@@ -757,8 +800,29 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
               borderTop: '1px solid #e2e8f0',
               padding: '12px 20px',
               display: 'flex',
-              justifyContent: 'flex-end'
+              justifyContent: 'flex-end',
+              gap: '8px'
             }}>
+              {showManualDevIndexInput && (
+                <button
+                  className="btn"
+                  onClick={handleValidateManualDevIndex}
+                  disabled={validatingDev || !manualDevIndexContent.trim()}
+                  style={{
+                    background: '#2563eb',
+                    color: 'white',
+                    border: 'none',
+                    padding: '6px 16px',
+                    borderRadius: '6px',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    cursor: validatingDev || !manualDevIndexContent.trim() ? 'not-allowed' : 'pointer',
+                    opacity: validatingDev || !manualDevIndexContent.trim() ? 0.6 : 1
+                  }}
+                >
+                  Validate index.md
+                </button>
+              )}
               <button
                 className="btn"
                 onClick={handleCloseValidationModal}
@@ -848,19 +912,63 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
     setShowValidationModal(false);
   }
 
-  async function runDevValidation() {
+  function handleManualDevIndexChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    setManualDevIndexContent(e.target.value);
+  }
+
+  async function handleValidateManualDevIndex() {
+    const trimmed = manualDevIndexContent.trim();
+    if (!trimmed) return;
     setValidatingDev(true);
     setDevValidationResult(null);
     try {
-      addLog('Fetching index.md from Looker Extension SDK for invoking user...');
+      addLog('Validating pasted index.md content via backend...');
+      const data = await callBackendAction('validate_dev_index', { index_content: trimmed });
+      setDevValidationResult(data);
+      addLog(`Dev validation completed: ${data?.valid ? 'Valid' : 'Invalid'}`);
+    } catch (err: any) {
+      console.error('Dev validation failed:', err);
+      setDevValidationResult({
+        valid: false,
+        message: 'Backend call failed during development validation.',
+        details: err.message || String(err)
+      });
+    } finally {
+      setValidatingDev(false);
+    }
+  }
+
+  async function runDevValidation() {
+    setValidatingDev(true);
+    setDevValidationResult(null);
+    setDevFetchNotice(null);
+    setShowManualDevIndexInput(false);
+    try {
+      addLog('Fetching index.md via coreSDK.project_file("nano_admin", "index.md")...');
       let indexContent = '';
+      let fetchNotice: string | null = null;
       try {
-        const rawContent = await coreSDK.ok(
-          coreSDK.get('/projects/nano_admin/file/content', { file_path: 'index.md' }) as any
+        const rawFile = await coreSDK.ok(
+          coreSDK.project_file('nano_admin', 'index.md') as any
         );
-        indexContent = typeof rawContent === 'string' ? rawContent : ((rawContent as any)?.value || JSON.stringify(rawContent));
+        if (typeof rawFile === 'string') {
+          indexContent = rawFile;
+        } else if (rawFile && typeof rawFile === 'object') {
+          indexContent = (rawFile as any).content || (rawFile as any).value || '';
+        }
       } catch (sdkErr: any) {
-        addLog(`Notice: Extension SDK file content fetch returned: ${sdkErr.message || String(sdkErr)}`);
+        const errMsg = sdkErr.message || String(sdkErr);
+        addLog(`Notice: Extension SDK project_file fetch returned: ${errMsg}`);
+        fetchNotice = `Could not automatically read index.md via Extension SDK (${errMsg}). Please paste your index.md contents below to validate.`;
+      }
+
+      if (!indexContent || !indexContent.trim()) {
+        setDevFetchNotice(
+          fetchNotice ||
+            'Looker project_file returned file metadata without raw content. Please paste your index.md contents below to validate.'
+        );
+        setShowManualDevIndexInput(true);
+        return;
       }
 
       addLog('Initiating development index.md validation check via backend...');

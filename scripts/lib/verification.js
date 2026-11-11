@@ -1,7 +1,38 @@
+const fs = require('fs');
+const path = require('path');
 const https = require('https');
 const { execSync } = require('child_process');
 const { loadLocalBuildHash } = require('./gcp');
 const { parseJsonFromStdout, buildLookerCliFlags } = require('./prereqs');
+
+function getRequiredCoreApiMethods() {
+  const defaultMethods = ['me', 'all_users', 'user_roles', 'project_file'];
+  try {
+    const localManifestPath = path.join(__dirname, '..', '..', 'extension', 'manifest.lkml');
+    if (fs.existsSync(localManifestPath)) {
+      const content = fs.readFileSync(localManifestPath, 'utf8');
+      const match = content.match(/core_api_methods:\s*\[([\s\S]*?)\]/);
+      if (match && match[1]) {
+        const parsed = match[1]
+          .split(',')
+          .map(s => s.replace(/["'\s]/g, '').trim())
+          .filter(Boolean);
+        if (parsed.length > 0) return parsed;
+      }
+    }
+  } catch (e) {}
+  return defaultMethods;
+}
+
+function parseManifestCoreApiMethods(manifestText) {
+  if (!manifestText) return [];
+  const match = manifestText.match(/core_api_methods:\s*\[([\s\S]*?)\]/);
+  if (!match || !match[1]) return [];
+  return match[1]
+    .split(',')
+    .map(s => s.replace(/["'\s]/g, '').trim())
+    .filter(Boolean);
+}
 
 function fetchUrlContent(url) {
   return new Promise((resolve, reject) => {
@@ -201,10 +232,20 @@ async function runPostDeploymentVerification(config, gcfUrl) {
           prodManifestContent.includes(`${gcfUrlOrigin}/oauth/authorize`) &&
           prodManifestContent.includes(`${gcfUrlOrigin}/oauth/token`)
         );
-        if (hasGcf && hasGcs && hasOAuthUrls) {
+        const requiredMethods = getRequiredCoreApiMethods();
+        const remoteMethods = parseManifestCoreApiMethods(prodManifestContent);
+        const missingMethods = requiredMethods.filter(m => !remoteMethods.includes(m));
+        const hasAllCoreMethods = missingMethods.length === 0;
+
+        if (hasGcf && hasGcs && hasOAuthUrls && hasAllCoreMethods) {
           manifestPass = true;
         } else {
-          manifestDetails = `(Manifest missing URLs: gcfUrl=${hasGcf}, bundleUrl=${hasGcs}, oauth2Urls=${hasOAuthUrls})`;
+          const issues = [];
+          if (!hasGcf) issues.push('missing external_api_urls GCF URL');
+          if (!hasGcs) issues.push('missing bundle.js URL');
+          if (!hasOAuthUrls) issues.push('missing oauth2_urls');
+          if (!hasAllCoreMethods) issues.push(`missing core_api_methods: [${missingMethods.map(m => `"${m}"`).join(', ')}]`);
+          manifestDetails = `(${issues.join('; ')})`;
         }
       } else {
         manifestDetails = `(Could not read manifest.lkml from Looker project)`;
@@ -251,7 +292,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
     if (res.manifestPass) {
       console.log(`      ✅ PASS - Looker Production Manifest Entitlements (Matches required configuration)`);
     } else {
-      console.log(`      ⚠️ WARNING - Looker Production Manifest Entitlements [ACTION REQUIRED: Deploy extension manifest.lkml in project nano_admin. See details below.]`);
+      console.log(`      ⚠️ WARNING - Looker Production Manifest Entitlements ${res.manifestDetails ? `${res.manifestDetails} ` : ''}[ACTION REQUIRED: Deploy extension manifest.lkml in project nano_admin. See details below.]`);
     }
     console.log(`      ${res.indexPass ? '✅ PASS' : '⚠️ WARNING'} - Project Workflows Configuration ('index.md') ${res.indexPass ? '' : '[ACTION REQUIRED: Add workflow definitions to index.md]'}`);
     const expectedConnHint = res.expectedConnection ? `connection: "${res.expectedConnection}"` : 'a valid connection name';
