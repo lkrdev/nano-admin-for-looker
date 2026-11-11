@@ -509,6 +509,7 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                     <thead>
                       <tr style={{ background: '#f8fafc', borderBottom: '1px solid #e2e8f0', textAlign: 'left', color: '#64748b' }}>
                         <th style={{ padding: '8px' }}>Group Name</th>
+                        <th style={{ padding: '8px' }}>Group ID</th>
                         <th style={{ padding: '8px' }}>Scope Status</th>
                         <th style={{ padding: '8px' }}>Assigned Members</th>
                         <th style={{ padding: '8px', textAlign: 'right' }}>Actions</th>
@@ -518,6 +519,7 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                       {attr.tagged_groups.map((g: any) => (
                         <tr key={g.group_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                           <td style={{ padding: '8px', fontWeight: 600 }}>{g.group_name}</td>
+                          <td style={{ padding: '8px', color: '#64748b' }}><code>{g.group_id}</code></td>
                           <td style={{ padding: '8px' }}>
                             {g.is_active_scope ? (
                               <span style={{ color: '#16a34a', fontWeight: 600 }}>Active ('yes')</span>
