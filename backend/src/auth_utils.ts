@@ -150,12 +150,14 @@ export async function isUserAuthorized(
 /**
  * Resolves all Looker user IDs for Scope Group(s) that a given user belongs to.
  * Finds groups of the user that have the specified user attribute set to "yes".
+ * When includeSubgroups is true, also includes users belonging to descendant child groups.
  * Returns an array of string user IDs.
  */
 export async function getScopeGroupUserIds(
   sdk: any,
   userId: string,
-  attributeName: string = 'nano_admin_is_workflow_scope_group'
+  attributeName: string = 'nano_admin_is_workflow_scope_group',
+  includeSubgroups: boolean = false
 ): Promise<string[]> {
   console.log(`Resolving scope group user IDs for user ${userId} with attribute "${attributeName}"...`);
 
@@ -182,8 +184,43 @@ export async function getScopeGroupUserIds(
     return [];
   }
 
+  const targetGroupIdSet = new Set<string>(matchingGroupIds);
+
+  if (includeSubgroups && typeof sdk.search_groups_with_hierarchy === 'function') {
+    try {
+      const hierarchyItems = await sdk.ok(sdk.search_groups_with_hierarchy({}));
+      const childrenByParentId = new Map<string, string[]>();
+      for (const item of hierarchyItems || []) {
+        const childId = String(item.id);
+        const parentIds: string[] = Array.isArray(item.parent_group_ids)
+          ? item.parent_group_ids.map((p: any) => String(p))
+          : [];
+        for (const parentId of parentIds) {
+          if (!childrenByParentId.has(parentId)) {
+            childrenByParentId.set(parentId, []);
+          }
+          childrenByParentId.get(parentId)!.push(childId);
+        }
+      }
+
+      const queue = [...matchingGroupIds];
+      while (queue.length > 0) {
+        const currentGroupId = queue.shift()!;
+        const childIds = childrenByParentId.get(currentGroupId) || [];
+        for (const cid of childIds) {
+          if (!targetGroupIdSet.has(cid)) {
+            targetGroupIdSet.add(cid);
+            queue.push(cid);
+          }
+        }
+      }
+    } catch (err) {
+      // Ignore subgroup hierarchy lookup error
+    }
+  }
+
   const scopeUserIdSet = new Set<string>();
-  for (const groupId of matchingGroupIds) {
+  for (const groupId of Array.from(targetGroupIdSet)) {
     try {
       const groupUsers = await sdk.ok(sdk.all_group_users({ group_id: groupId, fields: 'id' }));
       (groupUsers || []).forEach((u: any) => {
@@ -199,36 +236,129 @@ export async function getScopeGroupUserIds(
   return Array.from(scopeUserIdSet);
 }
 
+/**
+ * Resolves the set of Looker User IDs that are privileged accounts:
+ * - Service Accounts (is_service_account === true)
+ * - Looker Admins (holding the 'Admin' role or a role with 'administer', 'all_access', or 'unlimited' permissions)
+ */
+export async function getPrivilegedUserIds(sdk: any): Promise<Set<string>> {
+  const privilegedIds = new Set<string>();
+  const adminRoleIds = new Set<string>();
+
+  if (typeof sdk.all_roles === 'function') {
+    try {
+      const allRoles = await sdk.ok(sdk.all_roles({}));
+      for (const r of allRoles || []) {
+        const isAdminRole =
+          r.name === 'Admin' ||
+          r.permission_set?.all_access === true ||
+          r.permission_set?.unlimited === true ||
+          (Array.isArray(r.permission_set?.permissions) &&
+            r.permission_set.permissions.includes('administer'));
+        if (isAdminRole && r.id !== undefined && r.id !== null) {
+          adminRoleIds.add(String(r.id));
+        }
+      }
+    } catch (err) {
+      // Ignore role lookup failure
+    }
+  }
+
+  if (typeof sdk.all_users === 'function') {
+    try {
+      const allUsers = await sdk.ok(
+        sdk.all_users({
+          fields: 'id,is_service_account,role_ids'
+        })
+      );
+      for (const u of allUsers || []) {
+        if (u.id === undefined || u.id === null) continue;
+        const uid = String(u.id);
+        const isServiceAccount = Boolean(u.is_service_account);
+        const userRoleIds: string[] = Array.isArray(u.role_ids)
+          ? u.role_ids.map((rid: any) => String(rid))
+          : [];
+        const isAdmin =
+          Boolean(u.is_admin) || userRoleIds.some((rid) => adminRoleIds.has(rid));
+        if (isServiceAccount || isAdmin) {
+          privilegedIds.add(uid);
+        }
+      }
+    } catch (err) {
+      // Ignore user lookup failure
+    }
+  }
+
+  return privilegedIds;
+}
+
+export type UserIdLimitationMode =
+  | 'self'
+  | 'scope_groups'
+  | 'scope_groups_minus_privileged'
+  | 'exclude_privileged'
+  | 'none';
+
 export interface UserIdLimitation {
-  mode?: 'self' | 'scope_groups' | 'none';
+  mode?: UserIdLimitationMode;
   attribute_name?: string;
+  include_subgroups?: boolean;
 }
 
 export interface UserIdLimitationResult {
   active: boolean;
   userIds: string[];
-  mode: 'self' | 'scope_groups' | 'none' | string;
+  mode: UserIdLimitationMode;
 }
 
 export async function resolveUserIdLimitation(
   sdk: any,
   currentUserId: string,
-  limitation?: UserIdLimitation
+  limitation?: UserIdLimitation,
+  defaultMode: UserIdLimitationMode = 'self'
 ): Promise<UserIdLimitationResult> {
-  const mode = limitation?.mode || 'self';
+  const mode: UserIdLimitationMode = limitation?.mode || defaultMode;
 
   if (mode === 'none') {
     return { active: false, userIds: [], mode: 'none' };
   }
 
-  if (mode === 'scope_groups' || (mode as any) === 'tenant_groups') {
+  if (mode === 'self') {
+    return { active: true, userIds: [String(currentUserId)], mode: 'self' };
+  }
+
+  if (mode === 'exclude_privileged') {
+    const [allUsers, privilegedIds] = await Promise.all([
+      typeof sdk.all_users === 'function'
+        ? sdk.ok(sdk.all_users({ fields: 'id,is_service_account,role_ids' }))
+        : Promise.resolve([]),
+      getPrivilegedUserIds(sdk)
+    ]);
+    const allowedIds = (allUsers || [])
+      .map((u: any) => String(u.id))
+      .filter((uid: string) => Boolean(uid) && !privilegedIds.has(uid));
+    return { active: true, userIds: allowedIds, mode: 'exclude_privileged' };
+  }
+
+  if (mode === 'scope_groups' || mode === 'scope_groups_minus_privileged') {
     const attributeName = limitation?.attribute_name || 'nano_admin_is_workflow_scope_group';
-    const scopeUserIds = await getScopeGroupUserIds(sdk, currentUserId, attributeName);
+    const includeSubgroups = Boolean(limitation?.include_subgroups);
+    const scopeUserIds = await getScopeGroupUserIds(sdk, currentUserId, attributeName, includeSubgroups);
+
+    if (mode === 'scope_groups_minus_privileged') {
+      const privilegedIds = await getPrivilegedUserIds(sdk);
+      const filteredIds = scopeUserIds.filter((uid) => !privilegedIds.has(String(uid)));
+      return {
+        active: true,
+        userIds: filteredIds,
+        mode: 'scope_groups_minus_privileged'
+      };
+    }
+
     return { active: true, userIds: scopeUserIds, mode: 'scope_groups' };
   }
 
-  // Default mode: 'self'
-  return { active: true, userIds: [String(currentUserId)], mode: 'self' };
+  throw new Error(`Unsupported user_id_limitation mode: "${String(mode)}"`);
 }
 
 
