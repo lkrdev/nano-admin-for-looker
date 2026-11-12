@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { fetchDevIndexMdContent } from '../../../devIndexHelper';
+import { GroupInspectionModal } from './GroupInspectionModal';
 
 export interface WorkflowComponentProps {
   workflowId: string;
@@ -15,6 +17,7 @@ export interface WorkflowComponentProps {
 export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
   label,
   parameters,
+  coreSDK,
   extensionSDK,
   addLog,
   callBackend
@@ -27,6 +30,16 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
   const [auditData, setAuditData] = useState<any | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [actionLoading, setActionLoading] = useState<boolean>(false);
+
+  // Dev mode index.md audit state
+  const [isDevWorkspace, setIsDevWorkspace] = useState<boolean>(false);
+  const [activeDevIndexContent, setActiveDevIndexContent] = useState<string | null>(null);
+  const [showDevPasteModal, setShowDevPasteModal] = useState<boolean>(false);
+  const [devPasteNotice, setDevPasteNotice] = useState<string | null>(null);
+  const [pastedDevIndexContent, setPastedDevIndexContent] = useState<string>('');
+
+  // Reusable Group Inspection Modal state
+  const [inspectedGroupId, setInspectedGroupId] = useState<string | null>(null);
 
   // Drilldown Modal state
   const [drillModalCategory, setDrillModalCategory] = useState<'0' | '1' | '2+' | null>(null);
@@ -43,16 +56,28 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
   // Collapsible Passed Checks state
   const [showPassedChecks, setShowPassedChecks] = useState<boolean>(false);
 
-  const defaultAttributeName = auditData?.default_attribute_name || parameters?.default_attribute_name || 'nano_admin_is_workflow_scope_group';
+  const defaultAttributeName =
+    auditData?.default_attribute_name ||
+    parameters?.default_attribute_name ||
+    'nano_admin_is_workflow_scope_group';
   const healthChecks = auditData?.health_checks || [];
-  const incompleteChecks = useMemo(() => healthChecks.filter((c: any) => !c.passed), [healthChecks]);
-  const passedChecks = useMemo(() => healthChecks.filter((c: any) => c.passed), [healthChecks]);
+  const incompleteChecks = useMemo(
+    () => healthChecks.filter((c: any) => !c.passed),
+    [healthChecks]
+  );
+  const passedChecks = useMemo(
+    () => healthChecks.filter((c: any) => c.passed),
+    [healthChecks]
+  );
 
   const firstFailedCheck = incompleteChecks.length > 0 ? incompleteChecks[0] : null;
   const remainingFailedChecks = incompleteChecks.length > 1 ? incompleteChecks.slice(1) : [];
 
-  const hostOrigin = (extensionSDK as any)?.lookerHostData?.hostUrl || (extensionSDK as any)?.hostUrl || '';
-  const ideHref = hostOrigin ? `${hostOrigin}/projects/nano_admin/files/index.md` : '/projects/nano_admin/files/index.md';
+  const hostOrigin =
+    (extensionSDK as any)?.lookerHostData?.hostUrl || (extensionSDK as any)?.hostUrl || '';
+  const ideHref = hostOrigin
+    ? `${hostOrigin}/projects/nano_admin/files/index.md`
+    : '/projects/nano_admin/files/index.md';
   const groupsHref = hostOrigin ? `${hostOrigin}/admin/groups` : '/admin/groups';
 
   const userDistribution = auditData?.user_scope_distribution || {
@@ -68,10 +93,15 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
   const userMisconfigurations = auditData?.user_misconfigurations || [];
   const deepSubgroupWarnings = auditData?.deep_subgroup_warnings || [];
   const privilegedScopeMembers = auditData?.privileged_scope_members || [];
+  const lateralEscalationWarnings = auditData?.lateral_escalation_warnings || [];
+  const unfilteredModeWarnings = auditData?.unfiltered_mode_warnings || [];
+
   const hasScopeTabAlerts =
     userMisconfigurations.length > 0 ||
     deepSubgroupWarnings.length > 0 ||
-    privilegedScopeMembers.length > 0;
+    privilegedScopeMembers.length > 0 ||
+    lateralEscalationWarnings.length > 0 ||
+    unfilteredModeWarnings.length > 0;
 
   const allAvailableUsers = useMemo(() => {
     const list0 = userDistribution.bucket_0 || [];
@@ -83,10 +113,11 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
   const filteredProvisionUsers = useMemo(() => {
     if (!userSearchInProvisioning.trim()) return allAvailableUsers;
     const term = userSearchInProvisioning.toLowerCase();
-    return allAvailableUsers.filter((u: any) =>
-      String(u.name || '').toLowerCase().includes(term) ||
-      String(u.email || '').toLowerCase().includes(term) ||
-      String(u.id || '').toLowerCase().includes(term)
+    return allAvailableUsers.filter(
+      (u: any) =>
+        String(u.name || '').toLowerCase().includes(term) ||
+        String(u.email || '').toLowerCase().includes(term) ||
+        String(u.id || '').toLowerCase().includes(term)
     );
   }, [allAvailableUsers, userSearchInProvisioning]);
 
@@ -99,26 +130,35 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
 
     if (!drillSearchTerm.trim()) return list;
     const term = drillSearchTerm.toLowerCase();
-    return list.filter((u: any) =>
-      String(u.name || '').toLowerCase().includes(term) ||
-      String(u.email || '').toLowerCase().includes(term) ||
-      String(u.id || '').toLowerCase().includes(term)
+    return list.filter(
+      (u: any) =>
+        String(u.name || '').toLowerCase().includes(term) ||
+        String(u.email || '').toLowerCase().includes(term) ||
+        String(u.id || '').toLowerCase().includes(term)
     );
   }, [drillModalCategory, drillSearchTerm, userDistribution]);
 
-  // 2. Effects
-  useEffect(handleFetchAudit, []);
+  useEffect(handleInitialMount, []);
 
-  // 3. Component JSX
+  // 2. Returned Component JSX
   if (loading) {
     return (
       <div style={{ padding: '40px', textAlign: 'center', color: '#64748b', fontFamily: 'Inter, system-ui, sans-serif' }}>
-        <div style={{
-          width: '32px', height: '32px', border: '3px solid #e2e8f0', borderTopColor: '#2563eb',
-          borderRadius: '50%', animation: 'spin 0.8s linear infinite', margin: '0 auto 12px auto'
-        }} />
+        <div
+          style={{
+            width: '32px',
+            height: '32px',
+            border: '3px solid #e2e8f0',
+            borderTopColor: '#2563eb',
+            borderRadius: '50%',
+            animation: 'spin 0.8s linear infinite',
+            margin: '0 auto 12px auto'
+          }}
+        />
         <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
-        <p style={{ margin: 0, fontSize: '13px', fontWeight: 500 }}>Auditing group and scope configurations...</p>
+        <p style={{ margin: 0, fontSize: '13px', fontWeight: 500 }}>
+          Auditing group and scope configurations...
+        </p>
       </div>
     );
   }
@@ -126,14 +166,36 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
   return (
     <div style={{ padding: '24px', maxWidth: '1200px', margin: '0 auto', fontFamily: 'Inter, system-ui, sans-serif', color: '#1e293b' }}>
       {/* Top Header */}
-      <div style={{ marginBottom: '20px' }}>
-        <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#0f172a' }}>
-          {label || 'Workflow Groups Manager'}
-        </h1>
-        <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#64748b' }}>
-          Audit Looker Scope Groups and Workflow Access controls.
-        </p>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '20px', flexWrap: 'wrap', gap: '12px' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <h1 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#0f172a' }}>
+              {label || 'Workflow Groups Manager'}
+            </h1>
+            {auditData?.audit_source === 'dev_override' ? (
+              <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '4px', background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' }}>
+                Auditing Dev index.md
+              </span>
+            ) : (
+              <span style={{ fontSize: '11px', fontWeight: 600, padding: '2px 8px', borderRadius: '4px', background: '#f1f5f9', color: '#475569' }}>
+                Auditing Production index.md
+              </span>
+            )}
+          </div>
+          <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#64748b' }}>
+            Audit Looker Scope Groups, Group Ownership, and Workflow Access controls.
+          </p>
+        </div>
+
+        {/* Refresh & Dev Audit Action Bar */}
+        {renderAuditActionButtons()}
       </div>
+
+      {auditData?.dev_parse_error && (
+        <div style={{ padding: '12px 16px', borderRadius: '8px', background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', marginBottom: '20px', fontSize: '13px' }}>
+          <strong>Dev index.md YAML Syntax Error:</strong> {auditData.dev_parse_error}
+        </div>
+      )}
 
       {errorMsg && (
         <div style={{ padding: '12px 16px', borderRadius: '8px', background: '#fef2f2', border: '1px solid #fecaca', color: '#991b1b', marginBottom: '20px', fontSize: '13px' }}>
@@ -172,18 +234,10 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
       {/* Tab 1: Landing / Setup Health */}
       {activeTab === 'landing' && (
         <div>
-          {/* Action Header bar with Refresh button inside tab content */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>
               System Health Overview
             </h2>
-            <button
-              onClick={handleRefresh}
-              disabled={actionLoading}
-              style={secondaryButtonStyle}
-            >
-              Refresh Audit
-            </button>
           </div>
 
           {!errorMsg && auditData && healthChecks.length > 0 && incompleteChecks.length === 0 ? (
@@ -192,23 +246,35 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                 Setup Healthy
               </h3>
               <p style={{ margin: '4px 0 0 0', fontSize: '13px', color: '#15803d' }}>
-                All {healthChecks.length} Scope Group checks passed cleanly.
+                All {healthChecks.length} Scope Group and Governance checks passed cleanly.
               </p>
             </div>
           ) : (
             incompleteChecks.length > 0 && (
               <div style={{ marginBottom: '24px' }}>
-                {/* 1. Primary Recommended Next Step (First Failed Check) */}
                 {firstFailedCheck && (
-                  <div style={{
-                    padding: '20px', borderRadius: '8px', background: '#f8fafc',
-                    border: '1px solid #cbd5e1', borderLeft: '5px solid #2563eb', marginBottom: '20px'
-                  }}>
+                  <div
+                    style={{
+                      padding: '20px',
+                      borderRadius: '8px',
+                      background: '#f8fafc',
+                      border: '1px solid #cbd5e1',
+                      borderLeft: '5px solid #2563eb',
+                      marginBottom: '20px'
+                    }}
+                  >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px' }}>
-                      <span style={{
-                        background: '#2563eb', color: '#ffffff', fontSize: '10px',
-                        fontWeight: 700, padding: '2px 8px', borderRadius: '4px', textTransform: 'uppercase'
-                      }}>
+                      <span
+                        style={{
+                          background: '#2563eb',
+                          color: '#ffffff',
+                          fontSize: '10px',
+                          fontWeight: 700,
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                          textTransform: 'uppercase'
+                        }}
+                      >
                         RECOMMENDED NEXT STEP
                       </span>
                       <span style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>
@@ -228,13 +294,10 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                       </p>
                     )}
 
-                    <div>
-                      {renderCheckActionButton(firstFailedCheck, true)}
-                    </div>
+                    <div>{renderCheckActionButton(firstFailedCheck, true)}</div>
                   </div>
                 )}
 
-                {/* 2. Remaining Incomplete Checks */}
                 {remainingFailedChecks.length > 0 && (
                   <div>
                     <h3 style={{ fontSize: '13px', fontWeight: 700, color: '#475569', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
@@ -245,9 +308,15 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                         <div
                           key={check.id}
                           style={{
-                            padding: '14px 18px', borderRadius: '8px', background: '#ffffff',
-                            border: '1px solid #e2e8f0', borderLeft: '4px solid #dc2626',
-                            display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '16px'
+                            padding: '14px 18px',
+                            borderRadius: '8px',
+                            background: '#ffffff',
+                            border: '1px solid #e2e8f0',
+                            borderLeft: '4px solid #dc2626',
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            alignItems: 'center',
+                            gap: '16px'
                           }}
                         >
                           <div>
@@ -259,9 +328,7 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                             </p>
                           </div>
 
-                          <div>
-                            {renderCheckActionButton(check, false)}
-                          </div>
+                          <div>{renderCheckActionButton(check, false)}</div>
                         </div>
                       ))}
                     </div>
@@ -277,12 +344,23 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
               <button
                 onClick={handleTogglePassedChecks}
                 style={{
-                  width: '100%', padding: '12px 16px', background: '#f8fafc', border: 'none',
-                  textAlign: 'left', cursor: 'pointer', display: 'flex', justifyContent: 'space-between',
-                  alignItems: 'center', fontSize: '13px', fontWeight: 600, color: '#475569'
+                  width: '100%',
+                  padding: '12px 16px',
+                  background: '#f8fafc',
+                  border: 'none',
+                  textAlign: 'left',
+                  cursor: 'pointer',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  color: '#475569'
                 }}
               >
-                <span>{showPassedChecks ? 'Hide' : 'Show'} Passed System Checks ({passedChecks.length})</span>
+                <span>
+                  {showPassedChecks ? 'Hide' : 'Show'} Passed System Checks ({passedChecks.length})
+                </span>
                 <span style={{ fontSize: '12px', color: '#16a34a', fontWeight: 600 }}>Verified</span>
               </button>
 
@@ -292,14 +370,23 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                     <div
                       key={check.id}
                       style={{
-                        padding: '10px 14px', borderRadius: '6px', background: '#ffffff',
-                        border: '1px solid #e2e8f0', display: 'flex', alignItems: 'center', gap: '10px'
+                        padding: '10px 14px',
+                        borderRadius: '6px',
+                        background: '#ffffff',
+                        border: '1px solid #e2e8f0',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px'
                       }}
                     >
                       <span style={{ color: '#16a34a', fontWeight: 700, fontSize: '11px' }}>PASSED</span>
                       <div>
-                        <span style={{ fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>{check.title}</span>
-                        <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#64748b' }}>{check.description}</p>
+                        <span style={{ fontSize: '13px', fontWeight: 600, color: '#1e293b' }}>
+                          {check.title}
+                        </span>
+                        <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#64748b' }}>
+                          {check.description}
+                        </p>
                       </div>
                     </div>
                   ))}
@@ -313,19 +400,109 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
       {/* Tab 2: Scope Groups Audit */}
       {activeTab === 'scope_audit' && (
         <div>
-          {/* Header inside tab content */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>
-              Scope Group Audit & User Coverage
+              Scope Group Audit & Governance Warnings
             </h2>
-            <button
-              onClick={handleRefresh}
-              disabled={actionLoading}
-              style={secondaryButtonStyle}
-            >
-              Refresh Audit
-            </button>
           </div>
+
+          {/* Lateral Escalation Warning: Group Owners on Mutating Scope Group */}
+          {lateralEscalationWarnings.length > 0 && (
+            <div style={{ padding: '16px 20px', borderRadius: '8px', background: '#fff1f2', border: '1px solid #fecdd3', marginBottom: '24px' }}>
+              <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#9f1239' }}>
+                Security Warning: Group Owners Configured on Mutating Scope Group (Lateral Escalation Risk)
+              </h3>
+              <p style={{ margin: '4px 0 12px 0', fontSize: '13px', color: '#881337' }}>
+                The following group(s) are managed via a <code>group-owners</code> workflow while also serving as an active Scope Group for user-mutating workflows. A group owner could onboard an arbitrary user into this Scope Group and then mutate their account via the user-management workflow.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {lateralEscalationWarnings.map((warn: any) => (
+                  <div
+                    key={`${warn.group_id}-${warn.scope_attribute_name}-${warn.ownership_attribute_name}`}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      background: '#ffffff',
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid #fda4af'
+                    }}
+                  >
+                    <span style={{ fontSize: '12px', color: '#334155' }}>
+                      <strong>{warn.group_name}</strong> (ID: <code>{warn.group_id}</code>, {warn.owner_count} owner(s)) — Scope Attribute: <code>{warn.scope_attribute_name}</code> • Mutating Workflows:{' '}
+                      {(warn.mutating_workflows || []).map((w: any) => w.label).join(', ')}
+                    </span>
+                    <button
+                      onClick={() => handleInspectGroup(warn.group_id)}
+                      style={{
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        border: '1px solid #dc2626',
+                        background: '#ffffff',
+                        color: '#dc2626',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        cursor: 'pointer'
+                      }}
+                    >
+                      Inspect Group & Owners
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Unfiltered User Management Mode Warning */}
+          {unfilteredModeWarnings.length > 0 && (
+            <div style={{ padding: '16px 20px', borderRadius: '8px', background: '#fffbeb', border: '1px solid #fde68a', marginBottom: '24px' }}>
+              <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#92400e' }}>
+                Configuration Warning: User Management Workflow Does Not Exclude Privileged Users
+              </h3>
+              <p style={{ margin: '4px 0 12px 0', fontSize: '13px', color: '#78350f' }}>
+                The following <code>user-management</code> workflow(s) use <code>scope_groups</code> or <code>none</code> instead of the recommended default <code>scope_groups_minus_privileged</code>.
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {unfilteredModeWarnings.map((warn: any) => (
+                  <div
+                    key={warn.workflow_id}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      background: '#ffffff',
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid #fcd34d'
+                    }}
+                  >
+                    <span style={{ fontSize: '12px', color: '#334155' }}>
+                      <strong>{warn.workflow_label}</strong> (<code>{warn.workflow_id}</code>) — Configured mode: <code>{warn.configured_mode}</code> (Recommended: <code>{warn.recommended_mode}</code>)
+                    </span>
+                    <a
+                      href={ideHref}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => navigateToLookerPath('/projects/nano_admin/files/index.md', e)}
+                      style={{
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        border: '1px solid #d97706',
+                        background: '#ffffff',
+                        color: '#b45309',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        textDecoration: 'none'
+                      }}
+                    >
+                      Edit index.md
+                    </a>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* User-Level Misconfigurations Alert */}
           {userMisconfigurations.length > 0 && (
@@ -338,14 +515,34 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
               </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 {userMisconfigurations.map((item: any) => (
-                  <div key={`${item.user_id}-${item.attribute_id}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#ffffff', padding: '8px 12px', borderRadius: '6px', border: '1px solid #fda4af' }}>
+                  <div
+                    key={`${item.user_id}-${item.attribute_id}`}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      background: '#ffffff',
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid #fda4af'
+                    }}
+                  >
                     <span style={{ fontSize: '12px', color: '#334155' }}>
                       <strong>{item.user_name}</strong> ({item.user_email}) — Attribute: <code>{item.attribute_name}</code> = <code>{item.value}</code>
                     </span>
                     <button
                       onClick={() => handleRemoveUserOverride(item.user_id, item.attribute_id)}
                       disabled={actionLoading}
-                      style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #dc2626', background: '#fff', color: '#dc2626', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}
+                      style={{
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        border: '1px solid #dc2626',
+                        background: '#fff',
+                        color: '#dc2626',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        cursor: 'pointer'
+                      }}
                     >
                       Remove Override
                     </button>
@@ -366,19 +563,40 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
               </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 {deepSubgroupWarnings.map((warn: any) => (
-                  <div key={`${warn.group_id}-${warn.attribute_name}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#ffffff', padding: '8px 12px', borderRadius: '6px', border: '1px solid #fcd34d' }}>
+                  <div
+                    key={`${warn.group_id}-${warn.attribute_name}`}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      background: '#ffffff',
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid #fcd34d'
+                    }}
+                  >
                     <span style={{ fontSize: '12px', color: '#334155' }}>
-                      <strong>{warn.group_name}</strong> (ID: <code>{warn.group_id}</code>, Attribute: <code>{warn.attribute_name}</code>) — Max Subgroup Depth: <strong>{warn.max_depth}</strong> ({(warn.deep_subgroups || []).map((sg: any) => `${sg.group_name} [depth ${sg.depth}]`).join(', ')})
+                      <strong>{warn.group_name}</strong> (ID: <code>{warn.group_id}</code>, Attribute: <code>{warn.attribute_name}</code>) — Max Subgroup Depth: <strong>{warn.max_depth}</strong> (
+                      {(warn.deep_subgroups || [])
+                        .map((sg: any) => `${sg.group_name} [depth ${sg.depth}]`)
+                        .join(', ')}
+                      )
                     </span>
-                    <a
-                      href={hostOrigin ? `${hostOrigin}/admin/groups/${warn.group_id}` : `/admin/groups/${warn.group_id}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => navigateToLookerPath(`/admin/groups/${warn.group_id}`, e)}
-                      style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #d97706', background: '#fff', color: '#b45309', fontSize: '11px', fontWeight: 600, textDecoration: 'none' }}
+                    <button
+                      onClick={() => handleInspectGroup(warn.group_id)}
+                      style={{
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        border: '1px solid #d97706',
+                        background: '#fff',
+                        color: '#b45309',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        cursor: 'pointer'
+                      }}
                     >
-                      Inspect in Looker Groups
-                    </a>
+                      Inspect Group
+                    </button>
                   </div>
                 ))}
               </div>
@@ -392,21 +610,49 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                 Security Warning: Admin or Service Account Members in Active Scope Groups
               </h3>
               <p style={{ margin: '4px 0 12px 0', fontSize: '13px', color: '#881337' }}>
-                User mutation workflows are enabled while Looker Admin or Service Account users belong to active Scope Groups. Delegated user administrators in those Scope Groups could modify or disable these high-privilege accounts.
+                User mutation workflows are enabled while Looker Admin or Service Account users belong to active Scope Groups.
               </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                 {privilegedScopeMembers.map((item: any) => (
-                  <div key={`${item.group_id}-${item.user_id}-${item.attribute_name}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: '#ffffff', padding: '8px 12px', borderRadius: '6px', border: '1px solid #fda4af' }}>
+                  <div
+                    key={`${item.group_id}-${item.user_id}-${item.attribute_name}`}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      background: '#ffffff',
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid #fda4af'
+                    }}
+                  >
                     <span style={{ fontSize: '12px', color: '#334155' }}>
                       <strong>{item.user_name}</strong> ({item.user_email || `ID: ${item.user_id}`})
-                      {item.is_admin && <span style={{ marginLeft: '6px', padding: '1px 6px', borderRadius: '4px', background: '#fee2e2', color: '#991b1b', fontSize: '10px', fontWeight: 700 }}>ADMIN</span>}
-                      {item.is_service_account && <span style={{ marginLeft: '6px', padding: '1px 6px', borderRadius: '4px', background: '#fef3c7', color: '#92400e', fontSize: '10px', fontWeight: 700 }}>SERVICE ACCOUNT</span>}
-                      {' '}in Scope Group <strong>{item.group_name}</strong> (<code>{item.attribute_name}</code>)
+                      {item.is_admin && (
+                        <span style={{ marginLeft: '6px', padding: '1px 6px', borderRadius: '4px', background: '#fee2e2', color: '#991b1b', fontSize: '10px', fontWeight: 700 }}>
+                          ADMIN
+                        </span>
+                      )}
+                      {item.is_service_account && (
+                        <span style={{ marginLeft: '6px', padding: '1px 6px', borderRadius: '4px', background: '#fef3c7', color: '#92400e', fontSize: '10px', fontWeight: 700 }}>
+                          SERVICE ACCOUNT
+                        </span>
+                      )}{' '}
+                      in Scope Group <strong>{item.group_name}</strong> (<code>{item.attribute_name}</code>)
                     </span>
                     <button
                       onClick={() => handleRemovePrivilegedMemberFromGroup(item.group_id, item.user_id)}
                       disabled={actionLoading}
-                      style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #dc2626', background: '#fff', color: '#dc2626', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}
+                      style={{
+                        padding: '4px 8px',
+                        borderRadius: '4px',
+                        border: '1px solid #dc2626',
+                        background: '#fff',
+                        color: '#dc2626',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        cursor: 'pointer'
+                      }}
                     >
                       Remove from Scope Group
                     </button>
@@ -421,33 +667,42 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
             User Scope Distribution ({userDistribution.total_active_users} Active Users)
           </h3>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginBottom: '24px' }}>
-            {/* 0 Scope Groups */}
             <div
               onClick={() => handleOpenDrillModal('0')}
               style={{ ...statCardStyle, borderTop: '4px solid #d97706' }}
             >
-              <div style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>0 Scope Groups (Unscoped)</div>
-              <div style={{ fontSize: '28px', fontWeight: 800, color: '#d97706', margin: '4px 0' }}>{userDistribution.unscoped_count}</div>
+              <div style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>
+                0 Scope Groups (Unscoped)
+              </div>
+              <div style={{ fontSize: '28px', fontWeight: 800, color: '#d97706', margin: '4px 0' }}>
+                {userDistribution.unscoped_count}
+              </div>
               <div style={{ fontSize: '11px', color: '#94a3b8' }}>Click to view unscoped users</div>
             </div>
 
-            {/* 1 Scope Group */}
             <div
               onClick={() => handleOpenDrillModal('1')}
               style={{ ...statCardStyle, borderTop: '4px solid #059669' }}
             >
-              <div style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>1 Scope Group (Isolated)</div>
-              <div style={{ fontSize: '28px', fontWeight: 800, color: '#059669', margin: '4px 0' }}>{userDistribution.isolated_count}</div>
+              <div style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>
+                1 Scope Group (Isolated)
+              </div>
+              <div style={{ fontSize: '28px', fontWeight: 800, color: '#059669', margin: '4px 0' }}>
+                {userDistribution.isolated_count}
+              </div>
               <div style={{ fontSize: '11px', color: '#94a3b8' }}>Click to view isolated users</div>
             </div>
 
-            {/* 2+ Scope Groups */}
             <div
               onClick={() => handleOpenDrillModal('2+')}
               style={{ ...statCardStyle, borderTop: '4px solid #2563eb' }}
             >
-              <div style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>2+ Scope Groups (Overlapping)</div>
-              <div style={{ fontSize: '28px', fontWeight: 800, color: '#2563eb', margin: '4px 0' }}>{userDistribution.overlapping_count}</div>
+              <div style={{ fontSize: '12px', fontWeight: 600, color: '#64748b' }}>
+                2+ Scope Groups (Overlapping)
+              </div>
+              <div style={{ fontSize: '28px', fontWeight: 800, color: '#2563eb', margin: '4px 0' }}>
+                {userDistribution.overlapping_count}
+              </div>
               <div style={{ fontSize: '11px', color: '#94a3b8' }}>Click to view multi-scope users</div>
             </div>
           </div>
@@ -458,14 +713,17 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
           </h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
             {(auditData?.scope_attributes || []).map((attr: any) => (
-              <div key={attr.attribute_name} style={{ borderRadius: '8px', border: '1px solid #e2e8f0', background: '#ffffff', padding: '16px' }}>
+              <div
+                key={attr.attribute_name}
+                style={{ borderRadius: '8px', border: '1px solid #e2e8f0', background: '#ffffff', padding: '16px' }}
+              >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   <div>
                     <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>
                       <code>{attr.attribute_name}</code>
                     </h4>
                     <span style={{ fontSize: '12px', color: '#64748b' }}>
-                      {attr.exists ? `Attribute defined in Looker` : `Not found in Looker`}
+                      {attr.exists ? 'Attribute defined in Looker' : 'Not found in Looker'}
                     </span>
                   </div>
                   {attr.exists ? (
@@ -485,21 +743,30 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
 
                 {/* Used by Workflows listing */}
                 <div style={{ marginBottom: '14px', padding: '8px 12px', borderRadius: '6px', background: '#f8fafc', border: '1px solid #f1f5f9', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#475569' }}>Used by Workflows:</span>
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#475569' }}>
+                    Used by Workflows:
+                  </span>
                   {attr.used_by_workflows && attr.used_by_workflows.length > 0 ? (
                     attr.used_by_workflows.map((wf: any) => (
                       <span
                         key={wf.id}
                         style={{
-                          padding: '2px 8px', borderRadius: '4px', background: '#ffffff',
-                          color: '#1e293b', border: '1px solid #cbd5e1', fontSize: '11px', fontWeight: 600
+                          padding: '2px 8px',
+                          borderRadius: '4px',
+                          background: '#ffffff',
+                          color: '#1e293b',
+                          border: '1px solid #cbd5e1',
+                          fontSize: '11px',
+                          fontWeight: 600
                         }}
                       >
                         {wf.label} (<code>{wf.template}</code>)
                       </span>
                     ))
                   ) : (
-                    <span style={{ fontSize: '12px', color: '#94a3b8', fontStyle: 'italic' }}>None configured in index.md</span>
+                    <span style={{ fontSize: '12px', color: '#94a3b8', fontStyle: 'italic' }}>
+                      None configured in index.md
+                    </span>
                   )}
                 </div>
 
@@ -512,6 +779,7 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                         <th style={{ padding: '8px' }}>Group ID</th>
                         <th style={{ padding: '8px' }}>Scope Status</th>
                         <th style={{ padding: '8px' }}>Assigned Members</th>
+                        <th style={{ padding: '8px' }}>Group Owners</th>
                         <th style={{ padding: '8px', textAlign: 'right' }}>Actions</th>
                       </tr>
                     </thead>
@@ -519,7 +787,9 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                       {attr.tagged_groups.map((g: any) => (
                         <tr key={g.group_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                           <td style={{ padding: '8px', fontWeight: 600 }}>{g.group_name}</td>
-                          <td style={{ padding: '8px', color: '#64748b' }}><code>{g.group_id}</code></td>
+                          <td style={{ padding: '8px', color: '#64748b' }}>
+                            <code>{g.group_id}</code>
+                          </td>
                           <td style={{ padding: '8px' }}>
                             {g.is_active_scope ? (
                               <span style={{ color: '#16a34a', fontWeight: 600 }}>Active ('yes')</span>
@@ -528,31 +798,47 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                             )}
                           </td>
                           <td style={{ padding: '8px' }}>{g.user_count} user(s)</td>
+                          <td style={{ padding: '8px' }}>
+                            {g.owner_count > 0 ? (
+                              <span style={{ fontSize: '12px', fontWeight: 600, color: '#1d4ed8' }}>
+                                {g.owner_count} owner(s)
+                              </span>
+                            ) : (
+                              <span style={{ color: '#94a3b8' }}>—</span>
+                            )}
+                          </td>
                           <td style={{ padding: '8px', textAlign: 'right' }}>
                             <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end', alignItems: 'center' }}>
+                              <button
+                                onClick={() => handleInspectGroup(g.group_id)}
+                                style={{
+                                  padding: '4px 8px',
+                                  borderRadius: '4px',
+                                  border: '1px solid #cbd5e1',
+                                  background: '#f8fafc',
+                                  color: '#1e293b',
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  cursor: 'pointer'
+                                }}
+                              >
+                                Inspect Group
+                              </button>
                               <button
                                 onClick={() => handleToggleScope(g.group_id, attr.attribute_name, !g.is_active_scope)}
                                 disabled={actionLoading}
                                 style={{
-                                  padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1',
-                                  background: '#fff', fontSize: '11px', fontWeight: 600, cursor: 'pointer'
+                                  padding: '4px 8px',
+                                  borderRadius: '4px',
+                                  border: '1px solid #cbd5e1',
+                                  background: '#fff',
+                                  fontSize: '11px',
+                                  fontWeight: 600,
+                                  cursor: 'pointer'
                                 }}
                               >
                                 {g.is_active_scope ? 'Disable Scope' : 'Enable Scope'}
                               </button>
-                              <a
-                                href={hostOrigin ? `${hostOrigin}/admin/groups/${g.group_id}` : `/admin/groups/${g.group_id}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={(e) => navigateToLookerPath(`/admin/groups/${g.group_id}`, e)}
-                                style={{
-                                  padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1',
-                                  background: '#f8fafc', color: '#334155', fontSize: '11px', fontWeight: 600,
-                                  textDecoration: 'none', display: 'inline-flex', alignItems: 'center'
-                                }}
-                              >
-                                Looker Group Admin
-                              </a>
                             </div>
                           </td>
                         </tr>
@@ -560,53 +846,10 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                     </tbody>
                   </table>
                 ) : (
-                  <p style={{ margin: 0, fontSize: '12px', color: '#94a3b8' }}>No Looker groups currently tagged with this attribute.</p>
+                  <p style={{ margin: 0, fontSize: '12px', color: '#94a3b8' }}>
+                    No Looker groups currently tagged with this attribute.
+                  </p>
                 )}
-
-                {/* Warning for user-level attribute overrides */}
-                {(() => {
-                  const attrUserMisconfigs = (userMisconfigurations || []).filter(
-                    (item: any) => item.attribute_name === attr.attribute_name || item.attribute_id === attr.attribute_id
-                  );
-                  if (attrUserMisconfigs.length === 0) return null;
-                  return (
-                    <div style={{ marginTop: '14px', padding: '12px 14px', borderRadius: '6px', background: '#fff1f2', border: '1px solid #fecdd3' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '4px' }}>
-                        <strong style={{ fontSize: '12px', fontWeight: 700, color: '#9f1239' }}>
-                          Warning: Attribute Assigned at User Level ({attrUserMisconfigs.length})
-                        </strong>
-                      </div>
-                      <p style={{ margin: '0 0 8px 0', fontSize: '12px', color: '#881337' }}>
-                        Scope group attributes should only be assigned to Looker Groups. The following user account(s) have direct user-level attribute overrides that bypass group control:
-                      </p>
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                        {attrUserMisconfigs.map((item: any) => (
-                          <div
-                            key={`${item.user_id}-${item.attribute_id}`}
-                            style={{
-                              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                              background: '#ffffff', padding: '6px 10px', borderRadius: '4px', border: '1px solid #fda4af'
-                            }}
-                          >
-                            <span style={{ fontSize: '12px', color: '#334155' }}>
-                              <strong>{item.user_name}</strong> ({item.user_email}) — Value: <code>{item.value}</code>
-                            </span>
-                            <button
-                              onClick={() => handleRemoveUserOverride(item.user_id, item.attribute_id)}
-                              disabled={actionLoading}
-                              style={{
-                                padding: '3px 8px', borderRadius: '4px', border: '1px solid #dc2626',
-                                background: '#fff', color: '#dc2626', fontSize: '11px', fontWeight: 600, cursor: 'pointer'
-                              }}
-                            >
-                              Remove Override
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })()}
               </div>
             ))}
           </div>
@@ -616,18 +859,15 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
       {/* Tab 3: Workflow Access Matrix */}
       {activeTab === 'access_matrix' && (
         <div>
-          {/* Header inside tab content */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-            <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>
-              Workflow Access Matrix (authorized_groups)
-            </h2>
-            <button
-              onClick={handleRefresh}
-              disabled={actionLoading}
-              style={secondaryButtonStyle}
-            >
-              Refresh Audit
-            </button>
+            <div>
+              <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>
+                Workflow Access Matrix (authorized_groups)
+              </h2>
+              <p style={{ margin: '2px 0 0 0', fontSize: '12px', color: '#64748b' }}>
+                Click any authorized group pill to inspect its members, subgroups, and group owners.
+              </p>
+            </div>
           </div>
 
           <div style={{ borderRadius: '8px', border: '1px solid #e2e8f0', background: '#ffffff', overflow: 'hidden' }}>
@@ -644,30 +884,54 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                 {(auditData?.workflow_access_matrix || []).map((wf: any) => (
                   <tr key={wf.workflow_id} style={{ borderBottom: '1px solid #f1f5f9' }}>
                     <td style={{ padding: '12px', fontWeight: 600 }}>{wf.workflow_label}</td>
-                    <td style={{ padding: '12px', color: '#64748b' }}><code>{wf.template}</code></td>
+                    <td style={{ padding: '12px', color: '#64748b' }}>
+                      <code>{wf.template}</code>
+                    </td>
                     <td style={{ padding: '12px' }}>
                       {wf.has_auth_groups ? (
                         <span style={{ color: '#2563eb', fontWeight: 600 }}>Restricted</span>
                       ) : (
-                        <span style={{ color: '#d97706', fontWeight: 600 }}>Unrestricted (All Users)</span>
+                        <span style={{ color: '#d97706', fontWeight: 600 }}>Denied (No Authorized Groups)</span>
                       )}
                     </td>
                     <td style={{ padding: '12px' }}>
                       {wf.authorized_groups && wf.authorized_groups.length > 0 ? (
                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                          {wf.authorized_groups.map((g: any) => (
-                            <span
-                              key={g.group_id}
-                              style={{
-                                padding: '2px 8px', borderRadius: '4px', fontSize: '12px',
-                                background: g.exists ? (g.user_count > 0 ? '#eff6ff' : '#fffbe6') : '#fef2f2',
-                                color: g.exists ? (g.user_count > 0 ? '#1d4ed8' : '#b45309') : '#991b1b',
-                                border: '1px solid #cbd5e1'
-                              }}
-                            >
-                              {g.group_name} ({g.user_count} members) {!g.exists && '[Invalid Group ID]'}
-                            </span>
-                          ))}
+                          {wf.authorized_groups.map((g: any) => {
+                            const ownersSuffix =
+                              g.owner_count && g.owner_count > 0
+                                ? `, ${g.owner_count} owners`
+                                : '';
+                            return (
+                              <button
+                                key={g.group_id}
+                                type="button"
+                                onClick={() => handleInspectGroup(g.group_id)}
+                                title="Click to inspect group members, subgroups, and owners"
+                                style={{
+                                  padding: '3px 10px',
+                                  borderRadius: '4px',
+                                  fontSize: '12px',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  background: g.exists
+                                    ? g.user_count > 0
+                                      ? '#eff6ff'
+                                      : '#fffbe6'
+                                    : '#fef2f2',
+                                  color: g.exists
+                                    ? g.user_count > 0
+                                      ? '#1d4ed8'
+                                      : '#b45309'
+                                    : '#991b1b',
+                                  border: '1px solid #cbd5e1'
+                                }}
+                              >
+                                {g.group_name} ({g.user_count} members{ownersSuffix}){' '}
+                                {!g.exists && '[Invalid Group ID]'}
+                              </button>
+                            );
+                          })}
                         </div>
                       ) : (
                         <span style={{ color: '#94a3b8' }}>—</span>
@@ -684,18 +948,10 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
       {/* Tab 4: Provisioning */}
       {activeTab === 'provisioning' && (
         <div style={{ maxWidth: '680px' }}>
-          {/* Header inside tab content */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
             <h2 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>
               Provision New Scope Group
             </h2>
-            <button
-              onClick={handleRefresh}
-              disabled={actionLoading}
-              style={secondaryButtonStyle}
-            >
-              Refresh Audit
-            </button>
           </div>
 
           <div style={{ padding: '20px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#ffffff', display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -722,12 +978,13 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                 style={{ width: '100%', padding: '8px 12px', borderRadius: '6px', border: '1px solid #cbd5e1', fontSize: '13px' }}
               >
                 {(auditData?.monitored_attribute_names || [defaultAttributeName]).map((attrName: string) => (
-                  <option key={attrName} value={attrName}>{attrName}</option>
+                  <option key={attrName} value={attrName}>
+                    {attrName}
+                  </option>
                 ))}
               </select>
             </div>
 
-            {/* Assign Initial Members Section */}
             <div style={{ borderTop: '1px solid #e2e8f0', paddingTop: '14px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                 <div>
@@ -751,7 +1008,9 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                     onClick={handleToggleSelectAllUsers}
                     style={{ padding: '4px 8px', borderRadius: '4px', border: '1px solid #cbd5e1', background: '#f8fafc', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}
                   >
-                    {selectedUserIdsForNewGroup.length === allAvailableUsers.length ? 'Clear All' : 'Select All'}
+                    {selectedUserIdsForNewGroup.length === allAvailableUsers.length
+                      ? 'Clear All'
+                      : 'Select All'}
                   </button>
                 </div>
               </div>
@@ -772,8 +1031,13 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                       <label
                         key={u.id}
                         style={{
-                          display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 12px',
-                          borderBottom: '1px solid #f1f5f9', cursor: 'pointer', background: isSelected ? '#eff6ff' : 'transparent'
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '8px',
+                          padding: '8px 12px',
+                          borderBottom: '1px solid #f1f5f9',
+                          cursor: 'pointer',
+                          background: isSelected ? '#eff6ff' : 'transparent'
                         }}
                       >
                         <input
@@ -785,7 +1049,16 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                           <span style={{ fontWeight: 600, color: '#1e293b' }}>{u.name}</span>
                           <span style={{ color: '#64748b', marginLeft: '6px' }}>({u.email})</span>
                         </div>
-                        <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', background: u.scope_count === 0 ? '#fef3c7' : '#e0e7ff', color: u.scope_count === 0 ? '#92400e' : '#3730a3', fontWeight: 600 }}>
+                        <span
+                          style={{
+                            fontSize: '10px',
+                            padding: '2px 6px',
+                            borderRadius: '4px',
+                            background: u.scope_count === 0 ? '#fef3c7' : '#e0e7ff',
+                            color: u.scope_count === 0 ? '#92400e' : '#3730a3',
+                            fontWeight: 600
+                          }}
+                        >
                           {u.scope_count === 0 ? 'Unscoped' : `${u.scope_count} scope(s)`}
                         </span>
                       </label>
@@ -804,8 +1077,81 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
               disabled={actionLoading || !newGroupName.trim()}
               style={{ ...primaryButtonStyle, marginTop: '8px' }}
             >
-              {actionLoading ? 'Creating Group...' : `Create and Enable Scope Group (${selectedUserIdsForNewGroup.length} members)`}
+              {actionLoading
+                ? 'Creating Group...'
+                : `Create and Enable Scope Group (${selectedUserIdsForNewGroup.length} members)`}
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* Reusable Group Inspection Modal */}
+      {inspectedGroupId && (
+        <GroupInspectionModal
+          groupId={inspectedGroupId}
+          hostOrigin={hostOrigin}
+          onClose={handleCloseInspectGroup}
+          onGroupUpdated={handleRefreshCurrentAudit}
+          onInspectGroup={handleInspectGroup}
+          navigateToLookerPath={navigateToLookerPath}
+          callBackend={callBackend}
+          addLog={addLog}
+        />
+      )}
+
+      {/* Dev Mode Paste Fallback Modal */}
+      {showDevPasteModal && (
+        <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(15,23,42,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 }}>
+          <div style={{ background: '#ffffff', borderRadius: '10px', padding: '24px', width: '580px', maxWidth: '94vw', display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700, color: '#0f172a' }}>
+                Audit Development index.md
+              </h3>
+              <button
+                onClick={handleCloseDevPasteModal}
+                style={{ border: 'none', background: 'none', fontSize: '14px', fontWeight: 700, cursor: 'pointer', color: '#64748b' }}
+              >
+                Close
+              </button>
+            </div>
+
+            {devPasteNotice && (
+              <div style={{ padding: '10px 12px', borderRadius: '6px', background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e', fontSize: '12px' }}>
+                {devPasteNotice}
+              </div>
+            )}
+
+            <label style={{ fontSize: '12px', fontWeight: 600, color: '#334155' }}>
+              Paste your development <code>index.md</code> YAML below to run the audit against it:
+            </label>
+            <textarea
+              value={pastedDevIndexContent}
+              onChange={handlePastedDevIndexChange}
+              rows={10}
+              placeholder="workflows:&#10;  - id: my-workflow&#10;    label: My Workflow&#10;    template: user-management"
+              style={{
+                width: '100%',
+                boxSizing: 'border-box',
+                padding: '10px',
+                borderRadius: '6px',
+                border: '1px solid #cbd5e1',
+                fontFamily: 'monospace',
+                fontSize: '12px'
+              }}
+            />
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px' }}>
+              <button onClick={handleCloseDevPasteModal} style={secondaryButtonStyle}>
+                Cancel
+              </button>
+              <button
+                onClick={handleRunPastedDevAudit}
+                disabled={!pastedDevIndexContent.trim() || actionLoading}
+                style={primaryButtonStyle}
+              >
+                Run Audit on Dev index.md
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -818,7 +1164,12 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
               <h3 style={{ margin: 0, fontSize: '15px', fontWeight: 700 }}>
                 Users in {drillModalCategory} Scope Groups ({drillModalUsers.length})
               </h3>
-              <button onClick={handleCloseDrillModal} style={{ border: 'none', background: 'none', fontSize: '14px', fontWeight: 700, cursor: 'pointer', color: '#64748b' }}>Close</button>
+              <button
+                onClick={handleCloseDrillModal}
+                style={{ border: 'none', background: 'none', fontSize: '14px', fontWeight: 700, cursor: 'pointer', color: '#64748b' }}
+              >
+                Close
+              </button>
             </div>
 
             <input
@@ -847,7 +1198,18 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                       <td style={{ padding: '8px' }}>
                         {u.scope_groups && u.scope_groups.length > 0 ? (
                           u.scope_groups.map((gName: string) => (
-                            <span key={gName} style={{ display: 'inline-block', padding: '2px 6px', background: '#eff6ff', color: '#1d4ed8', borderRadius: '4px', margin: '2px', fontSize: '11px' }}>
+                            <span
+                              key={gName}
+                              style={{
+                                display: 'inline-block',
+                                padding: '2px 6px',
+                                background: '#eff6ff',
+                                color: '#1d4ed8',
+                                borderRadius: '4px',
+                                margin: '2px',
+                                fontSize: '11px'
+                              }}
+                            >
                               {gName}
                             </span>
                           ))
@@ -866,10 +1228,63 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
     </div>
   );
 
-  // 4. Hoisted Function Implementations
+  // 3. Hoisted Function Implementations
+  function handleInitialMount() {
+    detectDevWorkspaceStatus();
+    runAuditFetch(null, true);
+  }
+
+  function detectDevWorkspaceStatus() {
+    if (!coreSDK || typeof coreSDK.me !== 'function') return;
+    coreSDK
+      .ok(coreSDK.me('id,workspace_id'))
+      .then((meUser: any) => {
+        setIsDevWorkspace(meUser?.workspace_id === 'dev');
+      })
+      .catch(() => {
+        setIsDevWorkspace(false);
+      });
+  }
+
+  function renderAuditActionButtons() {
+    return (
+      <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+        {activeDevIndexContent !== null && (
+          <button
+            onClick={handleSwitchToProductionAudit}
+            disabled={actionLoading}
+            style={secondaryButtonStyle}
+          >
+            Audit Production index.md
+          </button>
+        )}
+        {isDevWorkspace && (
+          <button
+            onClick={handleAuditDevIndexClick}
+            disabled={actionLoading}
+            style={{
+              ...secondaryButtonStyle,
+              borderColor: '#f59e0b',
+              background: '#fffbeb',
+              color: '#b45309'
+            }}
+          >
+            Audit Dev index.md
+          </button>
+        )}
+        <button
+          onClick={handleRefreshCurrentAudit}
+          disabled={actionLoading}
+          style={secondaryButtonStyle}
+        >
+          Refresh Audit
+        </button>
+      </div>
+    );
+  }
+
   function navigateToLookerPath(path: string, event?: React.MouseEvent) {
     if (event) {
-      // Handle Ctrl / Cmd / Shift click or middle click
       if (event.ctrlKey || event.metaKey || event.shiftKey || event.button === 1) {
         if (extensionSDK && typeof extensionSDK.openBrowserWindow === 'function') {
           event.preventDefault();
@@ -880,7 +1295,6 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
       event.preventDefault();
     }
 
-    // Normal click: navigate host window cleanly using extensionSDK
     if (extensionSDK && typeof extensionSDK.updateLocation === 'function') {
       try {
         extensionSDK.updateLocation(path);
@@ -907,6 +1321,7 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
       case 'no_scope_workflows':
       case 'no_workflows_with_auth_groups':
       case 'invalid_auth_groups':
+      case 'user_management_unsafe_scope_mode':
         return (
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <a
@@ -969,9 +1384,9 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
             </a>
           </div>
         );
-
       case 'deep_subgroup_hierarchy':
       case 'privileged_accounts_in_scope_groups':
+      case 'group_owners_on_mutating_scope_group':
         return (
           <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             <button onClick={handleTabScopeAudit} style={buttonStyle}>
@@ -988,25 +1403,27 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
             </a>
           </div>
         );
-
       default:
         return null;
     }
   }
 
-  function handleFetchAudit() {
+  function runAuditFetch(indexContentOverride: string | null, updateInitialTab: boolean = false) {
     setLoading(true);
     setErrorMsg(null);
-    callBackend('get_groups_audit')
+    const payload = indexContentOverride ? { index_content: indexContentOverride } : {};
+    callBackend('get_groups_audit', payload)
       .then((res) => {
         setAuditData(res);
         setLoading(false);
-        const health = res?.health_checks || [];
-        const incomplete = health.filter((c: any) => !c.passed);
-        if (incomplete.length > 0) {
-          setActiveTab('landing');
-        } else {
-          setActiveTab('scope_audit');
+        if (updateInitialTab) {
+          const health = res?.health_checks || [];
+          const incomplete = health.filter((c: any) => !c.passed);
+          if (incomplete.length > 0) {
+            setActiveTab('landing');
+          } else {
+            setActiveTab('scope_audit');
+          }
         }
       })
       .catch((err) => {
@@ -1015,8 +1432,54 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
       });
   }
 
-  function handleRefresh() {
-    handleFetchAudit();
+  function handleRefreshCurrentAudit() {
+    runAuditFetch(activeDevIndexContent, false);
+  }
+
+  function handleSwitchToProductionAudit() {
+    setActiveDevIndexContent(null);
+    runAuditFetch(null, false);
+  }
+
+  async function handleAuditDevIndexClick() {
+    setActionLoading(true);
+    setErrorMsg(null);
+    try {
+      const { content, notice } = await fetchDevIndexMdContent(coreSDK, addLog);
+      if (content && content.trim()) {
+        setActiveDevIndexContent(content);
+        runAuditFetch(content, false);
+      } else {
+        setDevPasteNotice(notice);
+        setShowDevPasteModal(true);
+      }
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  function handleCloseDevPasteModal() {
+    setShowDevPasteModal(false);
+  }
+
+  function handlePastedDevIndexChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    setPastedDevIndexContent(e.target.value);
+  }
+
+  function handleRunPastedDevAudit() {
+    if (!pastedDevIndexContent.trim()) return;
+    const content = pastedDevIndexContent;
+    setShowDevPasteModal(false);
+    setActiveDevIndexContent(content);
+    runAuditFetch(content, false);
+  }
+
+  function handleInspectGroup(groupId: string) {
+    setInspectedGroupId(groupId);
+  }
+
+  function handleCloseInspectGroup() {
+    setInspectedGroupId(null);
   }
 
   function handleTabLanding() {
@@ -1041,7 +1504,7 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
     callBackend('create_user_attribute', { attribute_name: defaultAttributeName })
       .then(() => {
         addLog(`Created user attribute ${defaultAttributeName}`);
-        handleFetchAudit();
+        handleRefreshCurrentAudit();
       })
       .catch((err) => setErrorMsg(err.message || 'Failed to create user attribute.'))
       .finally(() => setActionLoading(false));
@@ -1050,7 +1513,7 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
   function handleToggleScope(groupId: string, attributeName: string, enable: boolean) {
     setActionLoading(true);
     callBackend('toggle_group_scope', { group_id: groupId, attribute_name: attributeName, enable })
-      .then(() => handleFetchAudit())
+      .then(() => handleRefreshCurrentAudit())
       .catch((err) => setErrorMsg(err.message || 'Failed to update scope attribute.'))
       .finally(() => setActionLoading(false));
   }
@@ -1058,7 +1521,7 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
   function handleRemoveUserOverride(userId: string, attributeId: string) {
     setActionLoading(true);
     callBackend('remove_user_attribute_override', { user_id: userId, attribute_id: attributeId })
-      .then(() => handleFetchAudit())
+      .then(() => handleRefreshCurrentAudit())
       .catch((err) => setErrorMsg(err.message || 'Failed to remove user override.'))
       .finally(() => setActionLoading(false));
   }
@@ -1066,7 +1529,7 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
   function handleRemovePrivilegedMemberFromGroup(groupId: string, userId: string) {
     setActionLoading(true);
     callBackend('manage_group_members', { group_id: groupId, user_id: userId, operation: 'remove' })
-      .then(() => handleFetchAudit())
+      .then(() => handleRefreshCurrentAudit())
       .catch((err) => setErrorMsg(err.message || 'Failed to remove user from scope group.'))
       .finally(() => setActionLoading(false));
   }
@@ -1092,7 +1555,9 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
   function handleSelectUnscopedUsers() {
     const unscoped = userDistribution.bucket_0 || [];
     const unscopedIds = unscoped.map((u: any) => String(u.id));
-    setSelectedUserIdsForNewGroup(Array.from(new Set([...selectedUserIdsForNewGroup, ...unscopedIds])));
+    setSelectedUserIdsForNewGroup(
+      Array.from(new Set([...selectedUserIdsForNewGroup, ...unscopedIds]))
+    );
   }
 
   function handleToggleSelectAllUsers() {
@@ -1115,7 +1580,7 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
         setNewGroupName('');
         setSelectedUserIdsForNewGroup([]);
         setActiveTab('scope_audit');
-        handleFetchAudit();
+        handleRefreshCurrentAudit();
       })
       .catch((err) => setErrorMsg(err.message || 'Failed to create group.'))
       .finally(() => setActionLoading(false));
@@ -1134,6 +1599,8 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
     setDrillSearchTerm(e.target.value);
   }
 };
+
+export default WorkflowGroupsManager;
 
 const getTabStyle = (active: boolean): React.CSSProperties => ({
   padding: '10px 16px',
@@ -1217,5 +1684,3 @@ const statCardStyle: React.CSSProperties = {
   cursor: 'pointer',
   transition: 'transform 0.1s ease'
 };
-
-export default WorkflowGroupsManager;

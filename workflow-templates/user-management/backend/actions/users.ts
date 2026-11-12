@@ -3,7 +3,7 @@ import {
   ResolvedScopeContext,
   WorkflowContext
 } from '../types';
-import { assertTargetUserInScope } from '../scope';
+import { assertTargetUserInScope, isScopeGroupsLimitationMode } from '../scope';
 import { buildEvaluatedUserAttributes, resolveCreationRequiredAttributes } from './attributes';
 
 export async function listUsersAction(
@@ -104,8 +104,8 @@ export async function createUserAction(
     throw new Error('At least a name or email is required to create a user.');
   }
 
-  // Enforce Scope Group membership requirement upon creation when scope_groups mode is active
-  if (scope.limitation.mode === 'scope_groups') {
+  // Enforce Scope Group membership requirement upon creation when scope_groups* mode is active
+  if (isScopeGroupsLimitationMode(scope.limitation.mode)) {
     const hasActiveScopeGroup = requestedGroupIds.some((gid) =>
       scope.adminActiveScopeGroupIds.includes(gid)
     );

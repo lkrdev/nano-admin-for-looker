@@ -1,4 +1,7 @@
-import { resolveUserIdLimitation } from '../../../auth_utils';
+import {
+  resolveUserIdLimitation,
+  UserIdLimitationMode
+} from '../../../auth_utils';
 import {
   ManageableGroupNode,
   NormalizedUserManagementParameters,
@@ -29,25 +32,6 @@ export async function resolveScopeContext(
 
   const manageableGroupIdsSet = new Set<string>(manageableGroups.map((g) => g.id));
 
-  // If scope_groups mode is active and descendant child groups exist, also include users in those child groups
-  if (limitation.active && limitation.mode === 'scope_groups') {
-    const expandedUserIds = new Set<string>(limitation.userIds.map((id) => String(id)));
-    const childGroups = manageableGroups.filter((g) => !g.is_scope_group);
-    for (const childGroup of childGroups) {
-      try {
-        const groupUsers = await sdk.ok(sdk.all_group_users({ group_id: childGroup.id, fields: 'id' }));
-        for (const u of groupUsers || []) {
-          if (u.id !== undefined && u.id !== null) {
-            expandedUserIds.add(String(u.id));
-          }
-        }
-      } catch (err) {
-        // Ignore child group user lookup error
-      }
-    }
-    limitation.userIds = Array.from(expandedUserIds);
-  }
-
   return {
     limitation,
     attributeName,
@@ -70,28 +54,32 @@ export function assertTargetUserInScope(
   }
 }
 
+export function isScopeGroupsLimitationMode(mode: UserIdLimitationMode): boolean {
+  return mode === 'scope_groups' || mode === 'scope_groups_minus_privileged';
+}
+
 // --- Hoisted Pure Helpers ---
 
 async function resolveLimitation(
   context: WorkflowContext,
   params: NormalizedUserManagementParameters
 ): Promise<UserIdLimitationResult> {
-  const limitationConfig = params.user_id_limitation;
+  const limitationConfig = {
+    ...params.user_id_limitation,
+    include_subgroups: true
+  };
   if (context.helpers?.resolveUserIdLimitation) {
-    return await context.helpers.resolveUserIdLimitation(limitationConfig);
+    return await context.helpers.resolveUserIdLimitation(
+      limitationConfig,
+      'scope_groups_minus_privileged'
+    );
   }
-  const mode = limitationConfig.mode;
-  if (mode === 'none') {
-    return { active: false, userIds: [], mode: 'none' };
-  }
-  if (mode === 'self') {
-    return { active: true, userIds: [String(context.userId)], mode: 'self' };
-  }
-  if (context.helpers?.getScopeGroupUserIds) {
-    const ids = await context.helpers.getScopeGroupUserIds(limitationConfig.attribute_name);
-    return { active: true, userIds: ids, mode: 'scope_groups' };
-  }
-  return await resolveUserIdLimitation(context.sdk, context.userId, limitationConfig);
+  return await resolveUserIdLimitation(
+    context.sdk,
+    context.userId,
+    limitationConfig,
+    'scope_groups_minus_privileged'
+  );
 }
 
 export async function resolveAdminActiveScopeGroupIds(
@@ -125,7 +113,7 @@ export async function resolveAdminActiveScopeGroupIds(
 export async function resolveManageableGroupHierarchy(
   sdk: any,
   adminActiveScopeGroupIds: string[],
-  mode: 'scope_groups' | 'self' | 'none'
+  mode: UserIdLimitationMode
 ): Promise<ManageableGroupNode[]> {
   let allGroups: any[] = [];
   try {
@@ -156,8 +144,8 @@ export async function resolveManageableGroupHierarchy(
     }
   }
 
-  // If mode is 'none', all groups are manageable
-  if (mode === 'none') {
+  // If mode is 'none' or 'exclude_privileged', all groups are manageable
+  if (mode === 'none' || mode === 'exclude_privileged') {
     const allIds = new Set<string>([
       ...Array.from(groupNameMap.keys()),
       ...adminActiveScopeGroupIds

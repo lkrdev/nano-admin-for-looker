@@ -490,3 +490,82 @@ test('user-management: folder_access scopes folders to Scope Group grants + desc
   });
   assert.equal(okRes.success, true);
 });
+
+test('user-management: default scope_groups_minus_privileged excludes Looker Admins and Service Accounts in Scope Group', async () => {
+  const sdk = buildMockLookerSdk({
+    all_users: async () => [
+      {
+        id: '100',
+        first_name: 'Alice',
+        last_name: 'Admin',
+        display_name: 'Alice Admin',
+        email: 'alice@example.com',
+        is_disabled: false,
+        is_service_account: false,
+        group_ids: ['10'],
+        role_ids: ['r_team_lead']
+      },
+      {
+        id: '200',
+        first_name: 'Bob',
+        last_name: 'Member',
+        display_name: 'Bob Member',
+        email: 'bob@example.com',
+        is_disabled: false,
+        is_service_account: false,
+        group_ids: ['10'],
+        role_ids: ['r_viewer']
+      },
+      {
+        id: '901',
+        first_name: 'Super',
+        last_name: 'Admin',
+        display_name: 'Super Admin',
+        email: 'super@example.com',
+        is_disabled: false,
+        is_service_account: false,
+        group_ids: ['10'],
+        role_ids: ['r_admin']
+      },
+      {
+        id: '902',
+        first_name: 'Automation',
+        last_name: 'Service',
+        display_name: 'Automation Service',
+        email: 'bot@example.com',
+        is_disabled: false,
+        is_service_account: true,
+        group_ids: ['10'],
+        role_ids: ['r_viewer']
+      }
+    ],
+    all_group_users: async (params: any) => {
+      if (String(params.group_id) === '10') {
+        return [
+          { id: '100', group_ids: ['10'], role_ids: ['r_team_lead'], is_service_account: false },
+          { id: '200', group_ids: ['10'], role_ids: ['r_viewer'], is_service_account: false },
+          { id: '901', group_ids: ['10'], role_ids: ['r_admin'], is_service_account: false },
+          { id: '902', group_ids: ['10'], role_ids: ['r_viewer'], is_service_account: true }
+        ];
+      }
+      return [];
+    }
+  });
+
+  // Default parameters (uses scope_groups_minus_privileged)
+  const ctx = makeContext(sdk, {}, '100');
+
+  const listRes = await handler(ctx, 'list_users', {});
+  const listedIds = listRes.users.map((u: any) => u.id).sort();
+  assert.deepEqual(listedIds, ['100', '200']);
+
+  // Attempting to inspect Looker Admin ('901') or Service Account ('902') in Scope Group '10' is rejected
+  await assert.rejects(
+    async () => await handler(ctx, 'get_user_detail', { user_id: '901' }),
+    /403 Forbidden: Target user "901" does not belong to an allowed user scope/i
+  );
+  await assert.rejects(
+    async () => await handler(ctx, 'get_user_detail', { user_id: '902' }),
+    /403 Forbidden: Target user "902" does not belong to an allowed user scope/i
+  );
+});

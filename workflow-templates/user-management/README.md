@@ -8,7 +8,8 @@ The `user-management` workflow template provides a comprehensive, scope-aware de
 
 1. **Least-Privilege Defaults**: Every mutation toggle (`allow_create`, `allow_update_name`, `allow_update_email`, `allow_disable`, `allow_delete`, `groups.allow_edit`, `roles.allow_edit`, `user_attributes.allow_edit`, `folder_access.allow_edit`, `telemetry.allow_manage_schedules`, and all `credentials.*` flags) defaults to `false` when omitted.
 2. **Scope Group Isolation (`user_id_limitation`)**:
-   - Defaults to `mode: "scope_groups"` (using `nano_admin_is_workflow_scope_group` unless overridden).
+   - Defaults to `mode: "scope_groups_minus_privileged"` (using `nano_admin_is_workflow_scope_group` unless overridden), which restricts visibility and mutations to users in the invoking admin's active Scope Groups while automatically excluding Looker Admin accounts and Service Accounts.
+   - Other supported modes: `"scope_groups"`, `"exclude_privileged"`, `"self"`, and `"none"`.
    - When creating a new user (`profile.allow_create: true`), the user must be assigned to at least one of the invoking admin's active Scope Groups. The backend adds the user to the selected Scope Group(s) immediately after `create_user` so partial failures never leave a user orphaned outside the admin's scope.
    - Removing a user from their final shared Scope Group displays a UI warning before execution.
 3. **Subgroup Hierarchy Scoping (`groups`)**:
@@ -45,7 +46,7 @@ workflows:
       - "10"
     parameters:
       user_id_limitation:
-        mode: "scope_groups"
+        mode: "scope_groups_minus_privileged"
         attribute_name: "nano_admin_is_workflow_scope_group"
       profile:
         allow_create: false

@@ -1,15 +1,10 @@
+import {
+  resolveUserIdLimitation,
+  UserIdLimitation,
+  UserIdLimitationMode,
+  UserIdLimitationResult
+} from '../../../auth_utils';
 import { LookerBackendSDK } from '../../../looker_logging_sdk';
-
-export interface UserIdLimitation {
-  mode?: 'self' | 'scope_groups' | 'none';
-  attribute_name?: string;
-}
-
-export interface UserIdLimitationResult {
-  active: boolean;
-  userIds: string[];
-  mode: 'self' | 'scope_groups' | 'none' | string;
-}
 
 export interface WorkflowContext {
   sdk: LookerBackendSDK | any;
@@ -25,8 +20,11 @@ export interface WorkflowContext {
     user_id_limitation?: UserIdLimitation;
   };
   helpers?: {
-    getScopeGroupUserIds: (attributeName?: string) => Promise<string[]>;
-    resolveUserIdLimitation: (limitationConfig?: UserIdLimitation) => Promise<UserIdLimitationResult>;
+    getScopeGroupUserIds: (attributeName?: string, includeSubgroups?: boolean) => Promise<string[]>;
+    resolveUserIdLimitation: (
+      limitationConfig?: UserIdLimitation,
+      defaultMode?: UserIdLimitationMode
+    ) => Promise<UserIdLimitationResult>;
   };
 }
 
@@ -340,20 +338,10 @@ export const handler = async (
 
 async function resolveLimitation(context: WorkflowContext): Promise<UserIdLimitationResult> {
   const userLimitationConfig = context.parameters?.user_id_limitation;
+  const defaultMode: UserIdLimitationMode = userLimitationConfig ? 'self' : 'none';
   if (context.helpers?.resolveUserIdLimitation) {
-    return await context.helpers.resolveUserIdLimitation(userLimitationConfig);
+    return await context.helpers.resolveUserIdLimitation(userLimitationConfig, defaultMode);
   }
-  const mode = userLimitationConfig?.mode || 'none';
-  if (mode === 'none') {
-    return { active: false, userIds: [], mode: 'none' };
-  }
-  if (mode === 'self') {
-    return { active: true, userIds: [String(context.userId)], mode: 'self' };
-  }
-  if (mode === 'scope_groups' && context.helpers?.getScopeGroupUserIds) {
-    const ids = await context.helpers.getScopeGroupUserIds(userLimitationConfig?.attribute_name);
-    return { active: true, userIds: ids, mode: 'scope_groups' };
-  }
-  return { active: true, userIds: [String(context.userId)], mode: 'self' };
+  return await resolveUserIdLimitation(context.sdk, context.userId, userLimitationConfig, defaultMode);
 }
 

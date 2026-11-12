@@ -1,15 +1,11 @@
+import {
+  UserIdLimitation,
+  UserIdLimitationMode,
+  UserIdLimitationResult
+} from '../../../auth_utils';
 import { LookerBackendSDK } from '../../../looker_logging_sdk';
 
-export interface UserIdLimitation {
-  mode?: 'scope_groups' | 'self' | 'none';
-  attribute_name?: string;
-}
-
-export interface UserIdLimitationResult {
-  active: boolean;
-  userIds: string[];
-  mode: 'scope_groups' | 'self' | 'none' | string;
-}
+export { UserIdLimitation, UserIdLimitationMode, UserIdLimitationResult };
 
 export interface ProfileParameters {
   allow_create: boolean;
@@ -65,7 +61,7 @@ export interface TelemetryParameters {
 
 export interface NormalizedUserManagementParameters {
   user_id_limitation: {
-    mode: 'scope_groups' | 'self' | 'none';
+    mode: UserIdLimitationMode;
     attribute_name: string;
   };
   profile: ProfileParameters;
@@ -84,8 +80,11 @@ export interface WorkflowContext {
   instanceHost?: string;
   parameters: Record<string, any>;
   helpers?: {
-    getScopeGroupUserIds: (attributeName?: string) => Promise<string[]>;
-    resolveUserIdLimitation: (limitationConfig?: UserIdLimitation) => Promise<UserIdLimitationResult>;
+    getScopeGroupUserIds: (attributeName?: string, includeSubgroups?: boolean) => Promise<string[]>;
+    resolveUserIdLimitation: (
+      limitationConfig?: UserIdLimitation,
+      defaultMode?: UserIdLimitationMode
+    ) => Promise<UserIdLimitationResult>;
   };
 }
 
@@ -108,9 +107,15 @@ export interface ResolvedScopeContext {
 
 export function normalizeParameters(rawParams: Record<string, any> = {}): NormalizedUserManagementParameters {
   const rawLimitation = rawParams.user_id_limitation || {};
-  const rawMode = rawLimitation.mode || 'scope_groups';
-  const normalizedMode: 'scope_groups' | 'self' | 'none' =
-    rawMode === 'none' ? 'none' : rawMode === 'self' ? 'self' : 'scope_groups';
+  const rawMode = rawLimitation.mode || 'scope_groups_minus_privileged';
+  const normalizedMode: UserIdLimitationMode =
+    rawMode === 'none' ||
+    rawMode === 'self' ||
+    rawMode === 'scope_groups' ||
+    rawMode === 'exclude_privileged' ||
+    rawMode === 'scope_groups_minus_privileged'
+      ? rawMode
+      : 'scope_groups_minus_privileged';
   const attributeName = String(rawLimitation.attribute_name || 'nano_admin_is_workflow_scope_group').trim();
 
   const rawProfile = rawParams.profile || {};

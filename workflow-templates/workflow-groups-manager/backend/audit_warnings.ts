@@ -1,3 +1,9 @@
+import {
+  DEFAULT_GROUP_OWNERS_ATTRIBUTE,
+  GroupOwnershipRecord,
+  ResolvedGroupOwner
+} from '../../../group_ownership';
+
 export interface SubgroupInfo {
   group_id: string;
   group_name: string;
@@ -24,6 +30,25 @@ export interface PrivilegedScopeMemberWarning {
   group_name: string;
   attribute_name: string;
   triggering_workflows: Array<{ id: string; label: string; template: string }>;
+}
+
+export interface LateralEscalationWarning {
+  group_id: string;
+  group_name: string;
+  scope_attribute_name: string;
+  ownership_attribute_name: string;
+  owner_count: number;
+  owners: ResolvedGroupOwner[];
+  group_owners_workflows: Array<{ id: string; label: string }>;
+  mutating_workflows: Array<{ id: string; label: string; template: string }>;
+}
+
+export interface UnsafeScopeModeWarning {
+  workflow_id: string;
+  workflow_label: string;
+  template: string;
+  configured_mode: string;
+  recommended_mode: string;
 }
 
 export function findUserMutatingWorkflows(workflows: any[]): Array<{ id: string; label: string; template: string }> {
@@ -165,7 +190,6 @@ export async function inspectPrivilegedScopeGroupMembers(
     return { userMutationWorkflows, privilegedScopeMembers: [] };
   }
 
-  // Determine which role IDs grant Looker Admin privileges
   const adminRoleIds = new Set<string>();
   if (typeof sdk.all_roles === 'function') {
     try {
@@ -214,4 +238,108 @@ export async function inspectPrivilegedScopeGroupMembers(
   }
 
   return { userMutationWorkflows, privilegedScopeMembers };
+}
+
+/**
+ * Detects lateral escalation risk when a Looker group has Group Owners configured
+ * (with an active group-owners workflow in index.md) AND is also an active Scope Group
+ * (or child subgroup of an active Scope Group) for a user-mutating workflow.
+ */
+export function inspectGroupOwnersScopeOverlapWarnings(
+  workflows: any[],
+  ownershipByAttrAndGroup: Map<string, Map<string, GroupOwnershipRecord>>,
+  activeScopeGroupsFlat: Array<{
+    group_id: string;
+    group_name: string;
+    attribute_name: string;
+  }>,
+  hierarchyByGroupId: Map<string, { max_depth: number; subgroups: SubgroupInfo[] }>
+): LateralEscalationWarning[] {
+  const groupOwnersWorkflows = (workflows || []).filter((wf: any) => wf.template === 'group-owners');
+  const userMutationWorkflows = findUserMutatingWorkflows(workflows);
+
+  if (groupOwnersWorkflows.length === 0 || userMutationWorkflows.length === 0) {
+    return [];
+  }
+
+  const warnings: LateralEscalationWarning[] = [];
+
+  for (const sg of activeScopeGroupsFlat) {
+    const scopeGroupId = String(sg.group_id);
+    const hInfo = hierarchyByGroupId.get(scopeGroupId);
+    const scopeHierarchyIds = new Set<string>([
+      scopeGroupId,
+      ...(hInfo?.subgroups || []).map((sub) => String(sub.group_id))
+    ]);
+
+    for (const goWf of groupOwnersWorkflows) {
+      const ownerAttr = String(
+        goWf.parameters?.ownership_attribute_name || DEFAULT_GROUP_OWNERS_ATTRIBUTE
+      ).trim();
+      const ownershipMap = ownershipByAttrAndGroup.get(ownerAttr);
+      if (!ownershipMap) continue;
+
+      for (const candidateGroupId of scopeHierarchyIds) {
+        const ownRecord = ownershipMap.get(candidateGroupId);
+        if (ownRecord && ownRecord.owner_count > 0) {
+          const alreadyAdded = warnings.some(
+            (w) =>
+              w.group_id === candidateGroupId &&
+              w.scope_attribute_name === sg.attribute_name &&
+              w.ownership_attribute_name === ownerAttr
+          );
+          if (!alreadyAdded) {
+            warnings.push({
+              group_id: candidateGroupId,
+              group_name:
+                candidateGroupId === scopeGroupId
+                  ? sg.group_name
+                  : hInfo?.subgroups.find((s) => s.group_id === candidateGroupId)?.group_name ||
+                    `Group ${candidateGroupId}`,
+              scope_attribute_name: sg.attribute_name,
+              ownership_attribute_name: ownerAttr,
+              owner_count: ownRecord.owner_count,
+              owners: ownRecord.owners,
+              group_owners_workflows: groupOwnersWorkflows
+                .filter(
+                  (w: any) =>
+                    String(w.parameters?.ownership_attribute_name || DEFAULT_GROUP_OWNERS_ATTRIBUTE).trim() ===
+                    ownerAttr
+                )
+                .map((w: any) => ({ id: w.id, label: w.label || w.id })),
+              mutating_workflows: userMutationWorkflows
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return warnings;
+}
+
+/**
+ * Flags any user-management workflow in index.md that explicitly configures
+ * mode: 'scope_groups' or mode: 'none' instead of 'scope_groups_minus_privileged'.
+ */
+export function inspectUnfilteredUserManagementModeWarnings(
+  workflows: any[]
+): UnsafeScopeModeWarning[] {
+  const warnings: UnsafeScopeModeWarning[] = [];
+
+  for (const wf of workflows || []) {
+    if (wf.template !== 'user-management') continue;
+    const rawMode = wf.parameters?.user_id_limitation?.mode;
+    if (rawMode === 'scope_groups' || rawMode === 'none') {
+      warnings.push({
+        workflow_id: wf.id,
+        workflow_label: wf.label || wf.id,
+        template: wf.template,
+        configured_mode: rawMode,
+        recommended_mode: 'scope_groups_minus_privileged'
+      });
+    }
+  }
+
+  return warnings;
 }

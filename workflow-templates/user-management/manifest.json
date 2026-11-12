@@ -11,12 +11,14 @@
         "mode": {
           "type": "string",
           "enum": [
+            "scope_groups_minus_privileged",
             "scope_groups",
+            "exclude_privileged",
             "self",
             "none"
           ],
-          "default": "scope_groups",
-          "description": "'scope_groups' (default) restricts to users in the invoking admin's active Scope Groups; 'self' restricts to the invoking user; 'none' applies no user ID scoping"
+          "default": "scope_groups_minus_privileged",
+          "description": "'scope_groups_minus_privileged' (default) restricts to users in the invoking admin's active Scope Groups excluding Looker Admins and Service Accounts; 'scope_groups' restricts to users in the invoking admin's active Scope Groups; 'exclude_privileged' allows all users except Looker Admins and Service Accounts; 'self' restricts to the invoking user; 'none' applies no user ID scoping"
         },
         "attribute_name": {
           "type": "string",

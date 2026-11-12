@@ -8,6 +8,7 @@ import {
   resolveInstanceAuthMode,
   sendBackendRequest
 } from './backendClient';
+import { fetchDevIndexMdContent } from './devIndexHelper';
 
 interface AppProps {
   extensionSDK: any;
@@ -944,29 +945,10 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
     setDevFetchNotice(null);
     setShowManualDevIndexInput(false);
     try {
-      addLog('Fetching index.md via coreSDK.project_file("nano_admin", "index.md")...');
-      let indexContent = '';
-      let fetchNotice: string | null = null;
-      try {
-        const rawFile = await coreSDK.ok(
-          coreSDK.project_file('nano_admin', 'index.md') as any
-        );
-        if (typeof rawFile === 'string') {
-          indexContent = rawFile;
-        } else if (rawFile && typeof rawFile === 'object') {
-          indexContent = (rawFile as any).content || (rawFile as any).value || '';
-        }
-      } catch (sdkErr: any) {
-        const errMsg = sdkErr.message || String(sdkErr);
-        addLog(`Notice: Extension SDK project_file fetch returned: ${errMsg}`);
-        fetchNotice = `Could not automatically read index.md via Extension SDK (${errMsg}). Please paste your index.md contents below to validate.`;
-      }
+      const { content: indexContent, notice: fetchNotice } = await fetchDevIndexMdContent(coreSDK, addLog);
 
       if (!indexContent || !indexContent.trim()) {
-        setDevFetchNotice(
-          fetchNotice ||
-            'Looker project_file returned file metadata without raw content. Please paste your index.md contents below to validate.'
-        );
+        setDevFetchNotice(fetchNotice);
         setShowManualDevIndexInput(true);
         return;
       }

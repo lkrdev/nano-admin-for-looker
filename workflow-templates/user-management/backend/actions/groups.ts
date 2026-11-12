@@ -3,7 +3,7 @@ import {
   ResolvedScopeContext,
   WorkflowContext
 } from '../types';
-import { assertTargetUserInScope } from '../scope';
+import { assertTargetUserInScope, isScopeGroupsLimitationMode } from '../scope';
 
 export async function getUserGroupsAction(
   context: WorkflowContext,
@@ -32,7 +32,7 @@ export async function getUserGroupsAction(
   const manageableGroups = scope.manageableGroups.map((g) => {
     const isMember = userGroupIds.has(g.id);
     const wouldLeaveZeroScope =
-      scope.limitation.mode === 'scope_groups' &&
+      isScopeGroupsLimitationMode(scope.limitation.mode) &&
       isMember &&
       ((g.is_scope_group &&
         currentScopeGroupMemberships.length === 1 &&
@@ -130,7 +130,7 @@ export async function removeUserFromGroupAction(
   );
   const isRemovingActiveScopeGroup = scope.adminActiveScopeGroupIds.includes(groupId);
   const removedFromFinalScope =
-    scope.limitation.mode === 'scope_groups' &&
+    isScopeGroupsLimitationMode(scope.limitation.mode) &&
     (remainingManageable.length === 0 ||
       (isRemovingActiveScopeGroup && remainingActiveScopeGroups.length === 0));
 

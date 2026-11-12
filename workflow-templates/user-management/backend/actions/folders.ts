@@ -244,7 +244,7 @@ export async function evaluateScopedFoldersForUser(
   // Determine root folders accessible by admin's Scope Groups (or all folders if mode === 'none')
   const scopedPermissionByFolderId = new Map<string, 'view' | 'edit'>();
 
-  if (scope.limitation.mode === 'none') {
+  if (scope.limitation.mode === 'none' || scope.limitation.mode === 'exclude_privileged') {
     for (const f of nonPersonalFolders) {
       scopedPermissionByFolderId.set(String(f.id), 'edit');
     }

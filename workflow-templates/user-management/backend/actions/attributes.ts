@@ -11,7 +11,8 @@ import { assertTargetUserInScope } from '../scope';
 const HARD_BLOCKED_ATTRIBUTE_NAMES = new Set<string>([
   'nano_admin_challenge',
   'nano_admin_admin_extension_nano_admin_challenge',
-  'nano_admin_is_workflow_scope_group'
+  'nano_admin_is_workflow_scope_group',
+  'nano_admin_group_owners'
 ]);
 
 export interface EvaluatedAttributeMetadata {
@@ -372,6 +373,10 @@ async function collectHardBlockedAttributeNames(
       const wfAttr = wf.parameters?.user_id_limitation?.attribute_name;
       if (wfAttr && typeof wfAttr === 'string') {
         blocked.add(wfAttr.trim().toLowerCase());
+      }
+      const ownerAttr = wf.parameters?.ownership_attribute_name;
+      if (ownerAttr && typeof ownerAttr === 'string') {
+        blocked.add(ownerAttr.trim().toLowerCase());
       }
     }
   } catch (err) {

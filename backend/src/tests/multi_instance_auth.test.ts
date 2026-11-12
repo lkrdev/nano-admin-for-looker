@@ -9,8 +9,11 @@ import { validateWorkflowsSchema } from '../actions/validate_dev_index';
 import { formatHostForLog, wrapLookerSDKWithLogging } from '../looker_logging_sdk';
 import {
   inspectGroupHierarchyForScopeGroups,
-  inspectPrivilegedScopeGroupMembers
+  inspectPrivilegedScopeGroupMembers,
+  inspectGroupOwnersScopeOverlapWarnings,
+  inspectUnfilteredUserManagementModeWarnings
 } from '../workflow-templates/workflow-groups-manager/backend/audit_warnings';
+import { handler as wgmHandler } from '../workflow-templates/workflow-groups-manager/backend/index';
 // @ts-ignore
 const { resolveAllowedInstances, sanitizeHostForSecret: gcpSanitizeHostForSecret } = require('../../../scripts/lib/gcp');
 
@@ -427,5 +430,152 @@ test('workflow-groups-manager audit_warnings — detects deep (>1 level) subgrou
   assert.equal(privRes.privilegedScopeMembers.length, 2);
   assert.ok(privRes.privilegedScopeMembers.some((m) => m.user_id === '1' && m.is_admin));
   assert.ok(privRes.privilegedScopeMembers.some((m) => m.user_id === '2' && m.is_service_account));
+});
+
+test('workflow-groups-manager audit_warnings — detects group-owners overlap with mutating Scope Groups and unsafe user-management mode', () => {
+  const workflows = [
+    {
+      id: 'go-wf',
+      label: 'Group Owners Delegation',
+      template: 'group-owners',
+      parameters: { group_ownership: { attribute_name: 'nano_admin_group_owners' } }
+    },
+    {
+      id: 'um-safe',
+      label: 'Safe User Mgmt',
+      template: 'user-management',
+      parameters: {}
+    },
+    {
+      id: 'um-unsafe',
+      label: 'Unsafe User Mgmt',
+      template: 'user-management',
+      parameters: { user_id_limitation: { mode: 'scope_groups' } }
+    }
+  ];
+
+  const activeScopeGroups = [
+    { group_id: '10', group_name: 'Marketing Scope Group', attribute_name: 'nano_admin_is_workflow_scope_group' },
+    { group_id: '20', group_name: 'Finance Scope Group', attribute_name: 'nano_admin_is_workflow_scope_group' }
+  ];
+
+  const ownershipByAttr = new Map([
+    [
+      'nano_admin_group_owners',
+      new Map([
+        [
+          '10',
+          {
+            group_id: '10',
+            attribute_id: 'attr_owners',
+            attribute_name: 'nano_admin_group_owners',
+            raw_value: 'u:100,g:5',
+            specifiers: [
+              { type: 'user' as const, id: '100' },
+              { type: 'group' as const, id: '5' }
+            ],
+            owners: [
+              { type: 'user' as const, id: '100', name: 'Alice', exists: true },
+              { type: 'group' as const, id: '5', name: 'Leads', exists: true }
+            ],
+            owner_count: 2
+          }
+        ]
+      ])
+    ]
+  ]);
+
+  const hierarchyByGroupId = new Map([
+    ['10', { max_depth: 0, subgroups: [] }],
+    ['20', { max_depth: 0, subgroups: [] }]
+  ]);
+
+  const overlapWarnings = inspectGroupOwnersScopeOverlapWarnings(
+    workflows,
+    ownershipByAttr,
+    activeScopeGroups,
+    hierarchyByGroupId
+  );
+  assert.equal(overlapWarnings.length, 1);
+  assert.equal(overlapWarnings[0].group_id, '10');
+  assert.equal(overlapWarnings[0].owner_count, 2);
+
+  const unsafeWarnings = inspectUnfilteredUserManagementModeWarnings(workflows);
+  assert.equal(unsafeWarnings.length, 1);
+  assert.equal(unsafeWarnings[0].workflow_id, 'um-unsafe');
+  assert.equal(unsafeWarnings[0].configured_mode, 'scope_groups');
+});
+
+test('workflow-groups-manager handler — supports dev index_content override, inspect_group, and update_group_owners', async () => {
+  const ownerValues = new Map<string, string>([['10', 'u:100']]);
+  const mockSdk: any = {
+    ok: async (val: any) => await val,
+    all_groups: async () => [
+      { id: '10', name: 'Marketing', user_count: 1, externally_managed: false },
+      { id: '20', name: 'Sales', user_count: 1, externally_managed: false }
+    ],
+    all_users: async () => [
+      { id: '100', first_name: 'Alice', last_name: 'Owner', email: 'alice@example.com', role_ids: [], is_service_account: false }
+    ],
+    all_user_attributes: async () => [
+      { id: 'attr_scope', name: 'nano_admin_is_workflow_scope_group', label: 'Scope Group', type: 'string' },
+      { id: 'attr_owners', name: 'nano_admin_group_owners', label: 'Group Owners', type: 'string' }
+    ],
+    all_user_attribute_group_values: async (attrId: string) => {
+      if (attrId === 'attr_scope') return [{ group_id: '10', value: 'yes' }];
+      if (attrId === 'attr_owners') {
+        return Array.from(ownerValues.entries()).map(([group_id, value]) => ({ group_id, value }));
+      }
+      return [];
+    },
+    update_user_attribute_group_value: async (groupId: string, attrId: string, body: { value: string }) => {
+      if (attrId === 'attr_owners') {
+        ownerValues.set(String(groupId), String(body?.value || ''));
+      }
+      return body;
+    },
+    all_group_users: async () => [{ id: '100', first_name: 'Alice', last_name: 'Owner', email: 'alice@example.com' }],
+    all_group_groups: async () => [],
+    search_groups_with_hierarchy: async () => [
+      { id: '10', name: 'Marketing', parent_group_ids: [] },
+      { id: '20', name: 'Sales', parent_group_ids: [] }
+    ],
+    all_roles: async () => []
+  };
+
+  const ctx: any = {
+    sdk: mockSdk,
+    userId: '100',
+    workflowId: 'wgm',
+    parameters: {},
+    instanceHost: 'dev.looker.app'
+  };
+
+  const devIndexMd = [
+    'workflows:',
+    '  - id: dev-only-wf',
+    '    label: Dev Only Group Owners',
+    '    template: group-owners',
+    '    authorized_groups:',
+    '      - "10"'
+  ].join('\n');
+
+  const auditRes = await wgmHandler(ctx, 'get_groups_audit', { index_content: devIndexMd });
+  assert.equal(auditRes.audit_source, 'dev_override');
+  assert.equal(auditRes.workflow_access_matrix.length, 1);
+  assert.equal(auditRes.workflow_access_matrix[0].workflow_id, 'dev-only-wf');
+  assert.equal(auditRes.workflow_access_matrix[0].authorized_groups[0].owner_count, 1);
+
+  const inspectRes = await wgmHandler(ctx, 'inspect_group', { group_id: '10' });
+  assert.equal(inspectRes.group.id, '10');
+  assert.equal(inspectRes.group.owner_count, 1);
+
+  const updateOwnersRes = await wgmHandler(ctx, 'update_group_owners', {
+    group_id: '10',
+    owner_type: 'group',
+    owner_id: '20',
+    operation: 'add'
+  });
+  assert.equal(updateOwnersRes.raw_value, 'u:100,g:20');
 });
 
