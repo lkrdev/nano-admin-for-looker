@@ -44,10 +44,12 @@
           "enum": [
             "self",
             "scope_groups",
+            "scope_groups_minus_privileged",
+            "exclude_privileged",
             "none"
           ],
           "default": "self",
-          "description": "'self' (default) filters to the invoking user's ID; 'scope_groups' filters to user IDs in scope groups where configured user attribute is 'yes'; 'none' applies no user ID filtering"
+          "description": "'self' (default) filters to the invoking user's ID; 'scope_groups' filters to user IDs in scope groups where configured user attribute is 'yes'; 'scope_groups_minus_privileged' filters to scope groups excluding Looker Admins and Service Accounts; 'exclude_privileged' filters out Looker Admins and Service Accounts; 'none' applies no user ID filtering"
         },
         "attribute_name": {
           "type": "string",

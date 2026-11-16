@@ -1,0 +1,71 @@
+{
+  "name": "Group Owners Workflow Template",
+  "description": "Delegated group membership, subgroup, and ownership management for designated Looker Group Owners.",
+  "version": "1.0.0",
+  "mount_type": "page",
+  "parameters": {
+    "ownership_attribute_name": {
+      "type": "string",
+      "default": "nano_admin_group_owners",
+      "description": "Looker User Attribute set on target groups specifying owners in canonical 'u:<id>,g:<id>' format"
+    },
+    "include_subgroups": {
+      "type": "boolean",
+      "default": true,
+      "description": "When true, owners of a parent group can also view and manage its descendant child subgroups"
+    },
+    "user_id_limitation": {
+      "type": "object",
+      "description": "Limitation enforcing which users can be discovered and added to owned groups or assigned as group owners",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "exclude_privileged",
+            "none",
+            "scope_groups_minus_privileged",
+            "scope_groups",
+            "self"
+          ],
+          "default": "exclude_privileged",
+          "description": "'exclude_privileged' (default) allows all users except Looker Admins and Service Accounts; 'none' allows all users; 'scope_groups_minus_privileged' restricts to active scope groups excluding Looker Admins and Service Accounts; 'scope_groups' restricts to active scope groups; 'self' restricts to the invoking user"
+        },
+        "attribute_name": {
+          "type": "string",
+          "default": "nano_admin_is_workflow_scope_group",
+          "description": "User attribute name set on Looker Groups for Scope Group matching when mode is scope_groups*"
+        }
+      }
+    },
+    "memberships": {
+      "type": "object",
+      "description": "Controls for managing user memberships, group owners, and child subgroups within owned groups",
+      "properties": {
+        "allow_add_users": {
+          "type": "boolean",
+          "default": true
+        },
+        "allow_remove_users": {
+          "type": "boolean",
+          "default": true
+        },
+        "allow_edit_owners": {
+          "type": "boolean",
+          "default": true
+        },
+        "allow_add_existing_groups": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_remove_child_groups": {
+          "type": "boolean",
+          "default": false
+        },
+        "allow_create_subgroups": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    }
+  }
+}

@@ -1,4 +1,9 @@
-import { getScopeGroupUserIds, UserIdLimitationResult, UserIdLimitation } from '../../../auth_utils';
+import {
+  resolveUserIdLimitation,
+  UserIdLimitation,
+  UserIdLimitationMode,
+  UserIdLimitationResult
+} from '../../../auth_utils';
 import { LookerBackendSDK } from '../../../looker_logging_sdk';
 
 export interface ExploreConfig {
@@ -17,8 +22,11 @@ export interface WorkflowContext {
     user_id_limitation?: UserIdLimitation;
   };
   helpers?: {
-    getScopeGroupUserIds: (attributeName?: string) => Promise<string[]>;
-    resolveUserIdLimitation: (limitationConfig?: UserIdLimitation) => Promise<UserIdLimitationResult>;
+    getScopeGroupUserIds: (attributeName?: string, includeSubgroups?: boolean) => Promise<string[]>;
+    resolveUserIdLimitation: (
+      limitationConfig?: UserIdLimitation,
+      defaultMode?: UserIdLimitationMode
+    ) => Promise<UserIdLimitationResult>;
   };
 }
 
@@ -285,25 +293,9 @@ async function resolveUserIdFilterValues(
   limitation?: UserIdLimitation
 ): Promise<UserIdLimitationResult> {
   if (context.helpers?.resolveUserIdLimitation) {
-    return await context.helpers.resolveUserIdLimitation(limitation);
+    return await context.helpers.resolveUserIdLimitation(limitation, 'self');
   }
-
-  const mode = limitation?.mode || 'self';
-
-  if (mode === 'none') {
-    return { active: false, userIds: [], mode: 'none' };
-  }
-
-  if (mode === 'scope_groups' || (mode as any) === 'tenant_groups') {
-    const attributeName = limitation?.attribute_name || 'nano_admin_is_workflow_scope_group';
-    const scopeUserIds = context.helpers?.getScopeGroupUserIds
-      ? await context.helpers.getScopeGroupUserIds(attributeName)
-      : await getScopeGroupUserIds(context.sdk, context.userId, attributeName);
-    return { active: true, userIds: scopeUserIds, mode: 'scope_groups' };
-  }
-
-  // Default mode: 'self'
-  return { active: true, userIds: [String(context.userId)], mode: 'self' };
+  return await resolveUserIdLimitation(context.sdk, context.userId, limitation, 'self');
 }
 
 function buildEnforcedFilters(

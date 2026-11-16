@@ -1,4 +1,4 @@
-import { getWorkflows, isUserAuthorized, getScopeGroupUserIds, resolveUserIdLimitation, UserIdLimitationResult, UserIdLimitation } from '../auth_utils';
+import { getWorkflows, isUserAuthorized, getScopeGroupUserIds, resolveUserIdLimitation, UserIdLimitationResult, UserIdLimitation, UserIdLimitationMode } from '../auth_utils';
 import { ActionHandler } from './registry';
 import { wrapLookerSDKWithLogging } from '../looker_logging_sdk';
 
@@ -71,10 +71,10 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
     instanceHost,
     parameters: workflow.parameters || {},
     helpers: {
-      getScopeGroupUserIds: (attributeName?: string): Promise<string[]> =>
-        getScopeGroupUserIds(workflowSdk, userId, attributeName),
-      resolveUserIdLimitation: (limitation?: UserIdLimitation): Promise<UserIdLimitationResult> =>
-        resolveUserIdLimitation(workflowSdk, userId, limitation)
+      getScopeGroupUserIds: (attributeName?: string, includeSubgroups?: boolean): Promise<string[]> =>
+        getScopeGroupUserIds(workflowSdk, userId, attributeName, includeSubgroups),
+      resolveUserIdLimitation: (limitation?: UserIdLimitation, defaultMode?: UserIdLimitationMode): Promise<UserIdLimitationResult> =>
+        resolveUserIdLimitation(workflowSdk, userId, limitation, defaultMode)
     }
   };
 
