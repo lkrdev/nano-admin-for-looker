@@ -42,7 +42,7 @@ Specify these top-level workflow parameters under your workflow in the `index.md
   - **`target_object`**: *(Required, string)* The Looker resource type. Must be one of the 12 types listed in the table above.
   - **`supported_operations`**: *(Required, array)* A list of allowed actions. Must be a subset of the allowed operations for that resource type. Supported names: `list`, `read`, `create`, `update`, `delete`. Each item in the array supports:
     - `name`: *(Required, string)* The action name.
-    - `fields`: *(Optional, array of strings)* A whitelist of fields to request from the Looker API. Use `["*"]` or omit to request default fields.
+    - `fields`: *(Optional, array of strings)* For `list`/`read`, a whitelist of fields to request from the Looker API (`["*"]` or omit to request default fields). For `create`/`update`, a **strict write allowlist** of fields permitted from user input (omitting `fields` or specifying `[]` permits no user-supplied fields—only `values`; use `["*"]` to explicitly permit all fields).
     - `values`: *(Optional, key-value object)* Forced default properties merged into the payload during `create` or `update` operations (useful for enforcing compliance).
 
 ---
@@ -70,6 +70,7 @@ workflows:
         - name: "read"
           fields: ["id", "first_name", "last_name", "email", "is_disabled"]
         - name: "create"
+          fields: ["first_name", "last_name", "email"]
           values:
             is_disabled: true
         - name: "update"

@@ -250,13 +250,7 @@ export const handler = async (
 
   // 3. CREATE Operation
   if (action === 'create') {
-    const forcedValues = opConfig.values || {};
-    const bodyPayload = payload?.body || payload || {};
-    const createBody = { ...bodyPayload, ...forcedValues };
-    
-    // Remove ID properties in case they were passed during creation
-    delete createBody.id;
-    delete createBody[meta.idParamName];
+    const createBody = buildMutationBody(payload, opConfig, meta, action, context.workflowId);
 
     if (limitation.active && meta.userIdParamName) {
       const userKey = meta.userIdParamName;
@@ -291,13 +285,7 @@ export const handler = async (
       }
     }
 
-    const forcedValues = opConfig.values || {};
-    const bodyPayload = payload?.body || payload || {};
-    const updateBody = { ...bodyPayload, ...forcedValues };
-    
-    // Remove ID fields from body update payload to prevent API rejection
-    delete updateBody.id;
-    delete updateBody[meta.idParamName];
+    const updateBody = buildMutationBody(payload, opConfig, meta, action, context.workflowId);
 
     if (limitation.active && meta.userIdParamName && updateBody[meta.userIdParamName] !== undefined) {
       const newOwnerId = String(updateBody[meta.userIdParamName]);
@@ -335,6 +323,63 @@ export const handler = async (
 };
 
 // --- Helper Functions ---
+
+/**
+ * Validates and constructs a Looker mutation body from untrusted payload input,
+ * enforcing `opConfig.fields` as a strict allowlist (fail-closed when omitted)
+ * and applying admin-configured `opConfig.values` last.
+ */
+function buildMutationBody(
+  rawPayload: any,
+  opConfig: { fields?: string[]; values?: Record<string, any> },
+  meta: TargetMeta,
+  action: string,
+  workflowId: string
+): Record<string, any> {
+  const bodySource = rawPayload?.body !== undefined ? rawPayload.body : rawPayload;
+  if (bodySource !== undefined && (bodySource === null || typeof bodySource !== 'object' || Array.isArray(bodySource))) {
+    throw new Error(`Invalid payload body for operation "${action}" on workflow "${workflowId}"`);
+  }
+
+  const input = bodySource || {};
+  const configuredFields = opConfig.fields;
+  const allowAll = Array.isArray(configuredFields) && configuredFields.includes('*');
+  const allowedSet = new Set(
+    (Array.isArray(configuredFields) ? configuredFields : []).filter(
+      f => f !== 'id' && f !== meta.idParamName
+    )
+  );
+
+  const sanitized: Record<string, any> = {};
+  const blockedKeys: string[] = [];
+
+  for (const key of Object.keys(input)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') {
+      blockedKeys.push(key);
+      continue;
+    }
+    if (key === 'id' || key === meta.idParamName) {
+      continue;
+    }
+    if (!allowAll && !allowedSet.has(key)) {
+      blockedKeys.push(key);
+      continue;
+    }
+    sanitized[key] = input[key];
+  }
+
+  if (blockedKeys.length > 0) {
+    throw new Error(
+      `403 Forbidden: Field(s) "${blockedKeys.join(', ')}" are not permitted for operation "${action}" on workflow "${workflowId}"`
+    );
+  }
+
+  const forcedValues = opConfig.values || {};
+  const result = { ...sanitized, ...forcedValues };
+  delete result.id;
+  delete result[meta.idParamName];
+  return result;
+}
 
 async function resolveLimitation(context: WorkflowContext): Promise<UserIdLimitationResult> {
   const userLimitationConfig = context.parameters?.user_id_limitation;
