@@ -284,6 +284,37 @@ test('LookerBackendSDK wrapper — blocks update_session and /session mutations 
     () => wrappedSdk.put('/api/4.0/session', { workspace_id: 'dev' }),
     /Security Violation: Mutating the backend Looker SDK session workspace is strictly forbidden/
   );
+  // String objects and percent-encoded paths are also blocked
+  assert.throws(
+    () => wrappedSdk.patch(new String('/session'), { workspace_id: 'dev' }),
+    /Security Violation: Mutating the backend Looker SDK session workspace is strictly forbidden/
+  );
+  assert.throws(
+    () => wrappedSdk.patch('/sessi%6fn', { workspace_id: 'dev' }),
+    /Security Violation: Mutating the backend Looker SDK session workspace is strictly forbidden/
+  );
+  assert.throws(
+    () => wrappedSdk.put('/api/4.0/%73ession', { workspace_id: 'dev' }),
+    /Security Violation: Mutating the backend Looker SDK session workspace is strictly forbidden/
+  );
+  // Non-session paths remain allowed
+  const safePatch = await wrappedSdk.patch('/api/4.0/users/1', { first_name: 'Safe' });
+  assert.equal(safePatch.path, '/api/4.0/users/1');
+
+  // _rawTarget escape hatch is not exposed, and re-wrapping preserves guards and merges context
+  assert.equal(wrappedSdk._rawTarget, undefined);
+  const rewrappedSdk: any = wrapLookerSDKWithLogging(wrappedSdk, { workflowId: 'wf_1' });
+  assert.equal(rewrappedSdk._rawTarget, undefined);
+  assert.deepEqual(rewrappedSdk._loggingContext, {
+    instanceHost: 'demoemea.cloud.looker.com',
+    userId: '2016',
+    action: 'test_action',
+    workflowId: 'wf_1'
+  });
+  assert.throws(
+    () => rewrappedSdk.update_session({ workspace_id: 'dev' }),
+    /Security Violation: Calling update_session or switching the backend Looker SDK session to the "dev" workspace is strictly forbidden/
+  );
 });
 
 test('formatHostForLog — limits logged hostnames to max 16 chars (12 leading + 4 hex hash when longer)', () => {

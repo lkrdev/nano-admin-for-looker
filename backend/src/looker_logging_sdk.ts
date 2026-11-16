@@ -18,9 +18,10 @@ export interface SDKLoggingContext {
 export type LookerBackendSDK = Omit<RawLookerSDK, 'update_session'> & {
   _isLoggingProxy?: boolean;
   _loggingContext?: SDKLoggingContext;
-  _rawTarget?: any;
   [key: string]: any;
 };
+
+const proxyToRawTarget = new WeakMap<object, any>();
 
 /**
  * Formats an instance hostname for compact log output (max 16 chars).
@@ -76,22 +77,19 @@ export function wrapLookerSDKWithLogging(sdk: any, contextInfo?: SDKLoggingConte
     return sdk;
   }
 
-  const rawTarget = sdk._isLoggingProxy && sdk._rawTarget ? sdk._rawTarget : sdk;
+  const rawTarget = proxyToRawTarget.get(sdk) || sdk;
   const loggingContext: SDKLoggingContext = {
     ...(sdk._loggingContext || {}),
     ...(contextInfo || {})
   };
 
-  return new Proxy(rawTarget, {
+  const proxy = new Proxy(rawTarget, {
     get(target, prop, receiver) {
       if (prop === '_isLoggingProxy') {
         return true;
       }
       if (prop === '_loggingContext') {
         return loggingContext;
-      }
-      if (prop === '_rawTarget') {
-        return rawTarget;
       }
 
       if (prop === 'update_session') {
@@ -108,11 +106,7 @@ export function wrapLookerSDKWithLogging(sdk: any, contextInfo?: SDKLoggingConte
         return function (...args: any[]) {
           const propName = String(prop);
 
-          if (
-            (propName === 'patch' || propName === 'put') &&
-            typeof args[0] === 'string' &&
-            args[0].includes('/session')
-          ) {
+          if (isSessionMutationCall(propName, args)) {
             throw new Error(
               'Security Violation: Mutating the backend Looker SDK session workspace is strictly forbidden.'
             );
@@ -176,4 +170,41 @@ export function wrapLookerSDKWithLogging(sdk: any, contextInfo?: SDKLoggingConte
       return orig;
     }
   });
+
+  proxyToRawTarget.set(proxy, rawTarget);
+  return proxy;
+}
+
+function isSessionMutationCall(propName: string, args: any[]): boolean {
+  const method = propName.toLowerCase();
+  if (method === 'patch' || method === 'put' || method === 'post' || method === 'delete') {
+    return isSessionPath(args[0]);
+  }
+  if (method === 'rawrequest' || method === 'authrequest') {
+    const httpMethod = String(args[0] || '').toUpperCase();
+    if (httpMethod === 'PATCH' || httpMethod === 'PUT' || httpMethod === 'POST' || httpMethod === 'DELETE') {
+      return isSessionPath(args[1]);
+    }
+  }
+  return false;
+}
+
+function isSessionPath(rawPath: unknown): boolean {
+  if (rawPath === null || rawPath === undefined) {
+    return false;
+  }
+
+  let normalized = String(rawPath).trim();
+  for (let i = 0; i < 3; i++) {
+    try {
+      const decoded = decodeURIComponent(normalized);
+      if (decoded === normalized) break;
+      normalized = decoded;
+    } catch {
+      break;
+    }
+  }
+
+  const pathOnly = normalized.split(/[?#]/)[0].replace(/\\+/g, '/').replace(/\/+/g, '/');
+  return /(^|\/)session(\/|$)/i.test(pathOnly);
 }
