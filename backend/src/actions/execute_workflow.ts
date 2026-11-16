@@ -1,6 +1,9 @@
+import path from 'path';
 import { getWorkflows, isUserAuthorized, getScopeGroupUserIds, resolveUserIdLimitation, UserIdLimitationResult, UserIdLimitation, UserIdLimitationMode } from '../auth_utils';
 import { ActionHandler } from './registry';
 import { wrapLookerSDKWithLogging } from '../looker_logging_sdk';
+
+const VALID_TEMPLATE_ID_REGEX = /^[-a-z0-9]{1,50}$/;
 
 export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody, actionContext) => {
   const { workflowId, workflowAction, payload } = reqBody;
@@ -28,17 +31,14 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
   }
 
   const templateId = workflow.template;
-  if (!templateId) {
-    throw { status: 400, message: `Workflow "${workflowId}" does not specify a template.` };
-  }
+  const resolvedBackendPath = resolveTemplateBackendPath(templateId, workflowId);
 
   console.log(`[Lazy Loading] Loading backend handler for template "${templateId}"...`);
 
   // 3. Lazy Load the template backend handler module
   let templateModule: any;
   try {
-    // Relative path from dist/actions/execute_workflow.js to dist/workflow-templates/<templateId>/backend
-    templateModule = require(`../workflow-templates/${templateId}/backend`);
+    templateModule = require(resolvedBackendPath);
   } catch (err: any) {
     console.error(`Failed to lazy load template "${templateId}" backend:`, err);
     throw {
@@ -95,3 +95,17 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
     };
   }
 };
+
+export function resolveTemplateBackendPath(templateId: unknown, workflowId: string): string {
+  if (!templateId || typeof templateId !== 'string' || !VALID_TEMPLATE_ID_REGEX.test(templateId)) {
+    throw { status: 400, message: `Workflow "${workflowId}" specifies an invalid template identifier.` };
+  }
+
+  const templatesRoot = path.resolve(__dirname, '..', 'workflow-templates');
+  const resolvedBackendPath = path.resolve(templatesRoot, templateId, 'backend');
+  if (!resolvedBackendPath.startsWith(templatesRoot + path.sep)) {
+    throw { status: 400, message: `Workflow "${workflowId}" specifies an invalid template identifier.` };
+  }
+
+  return resolvedBackendPath;
+}
