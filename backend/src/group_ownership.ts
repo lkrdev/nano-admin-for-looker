@@ -1,6 +1,7 @@
 import { getUserGroups } from './auth_utils';
 
 export const DEFAULT_GROUP_OWNERS_ATTRIBUTE = 'nano_admin_group_owners';
+const VALID_OWNER_ID_REGEX = /^[a-zA-Z0-9_-]+$/;
 
 export interface GroupOwnerSpecifier {
   type: 'user' | 'group';
@@ -54,13 +55,13 @@ export function parseGroupOwnerSpecifiers(rawValue: string): GroupOwnerSpecifier
 
     if (token.startsWith('u:')) {
       const uid = token.slice(2).trim();
-      if (uid && !seen.has(`u:${uid}`)) {
+      if (uid && VALID_OWNER_ID_REGEX.test(uid) && !seen.has(`u:${uid}`)) {
         seen.add(`u:${uid}`);
         result.push({ type: 'user', id: uid });
       }
     } else if (token.startsWith('g:')) {
       const gid = token.slice(2).trim();
-      if (gid && !seen.has(`g:${gid}`)) {
+      if (gid && VALID_OWNER_ID_REGEX.test(gid) && !seen.has(`g:${gid}`)) {
         seen.add(`g:${gid}`);
         result.push({ type: 'group', id: gid });
       }
@@ -80,6 +81,9 @@ export function formatGroupOwnerSpecifiers(specifiers: GroupOwnerSpecifier[]): s
   for (const spec of specifiers || []) {
     const cleanId = String(spec.id || '').trim();
     if (!cleanId) continue;
+    if (!VALID_OWNER_ID_REGEX.test(cleanId)) {
+      throw new Error(`Invalid owner ID "${cleanId}" in group owner specifier.`);
+    }
     const prefix = spec.type === 'group' ? 'g' : 'u';
     const key = `${prefix}:${cleanId}`;
     if (!seen.has(key)) {
@@ -308,6 +312,9 @@ export async function mutateGroupOwnerSpecifier(
   }
   if (!cleanOwnerId) {
     throw new Error('owner_id is required.');
+  }
+  if (!VALID_OWNER_ID_REGEX.test(cleanOwnerId)) {
+    throw new Error('owner_id contains invalid characters.');
   }
   if (ownerType !== 'user' && ownerType !== 'group') {
     throw new Error('owner_type must be either "user" or "group".');

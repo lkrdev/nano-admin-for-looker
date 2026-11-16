@@ -252,6 +252,15 @@ test('group_ownership: strictly parses and formats canonical u:<id>,g:<id> speci
     { type: 'group', id: '30' }
   ]);
   assert.equal(formatted, 'u:10,u:5,g:20,g:30');
+
+  assert.throws(
+    () => formatGroupOwnerSpecifiers([{ type: 'user', id: '123,u:999' }]),
+    /Invalid owner ID/i
+  );
+  assert.throws(
+    () => formatGroupOwnerSpecifiers([{ type: 'group', id: '123:456' }]),
+    /Invalid owner ID/i
+  );
 });
 
 test('group-owners: list_owned_groups resolves direct and inherited subgroup ownership', async () => {
@@ -338,6 +347,18 @@ test('group-owners: update_group_owner adds/removes owners and blocks privileged
     operation: 'remove'
   });
   assert.equal(remOwnerRes.raw_value, 'u:100,g:10');
+
+  // 4. Delimiter/specifier injection in owner_id is rejected
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'update_group_owner', {
+        group_id: '20',
+        owner_type: 'group',
+        owner_id: '30,u:999',
+        operation: 'add'
+      }),
+    /owner_id contains invalid characters/i
+  );
 
   // 4. Case-varied or invalid operation/owner_type cannot bypass limitation checks
   await assert.rejects(
