@@ -338,6 +338,38 @@ test('group-owners: update_group_owner adds/removes owners and blocks privileged
     operation: 'remove'
   });
   assert.equal(remOwnerRes.raw_value, 'u:100,g:10');
+
+  // 4. Case-varied or invalid operation/owner_type cannot bypass limitation checks
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'update_group_owner', {
+        group_id: '20',
+        owner_type: 'User',
+        owner_id: '1',
+        operation: 'ADD'
+      }),
+    /403 Forbidden: User "1" is outside the allowed user_id_limitation/i
+  );
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'update_group_owner', {
+        group_id: '20',
+        owner_type: 'user',
+        owner_id: '1',
+        operation: 'add\0'
+      }),
+    /Invalid operation/i
+  );
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'update_group_owner', {
+        group_id: '20',
+        owner_type: 'admin',
+        owner_id: '1',
+        operation: 'add'
+      }),
+    /Invalid owner_type/i
+  );
 });
 
 test('group-owners: child subgroup mutations enforce hierarchy cycle detection and capability flags', async () => {

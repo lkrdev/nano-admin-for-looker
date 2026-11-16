@@ -203,8 +203,18 @@ export async function updateOwnedGroupOwnerAction(
   }
 
   const groupId = String(payload?.group_id || '').trim();
-  const operation = String(payload?.operation || 'add').trim() as 'add' | 'remove';
-  const ownerType = String(payload?.owner_type || 'user').trim() as 'user' | 'group';
+  const rawOperation = String(payload?.operation || 'add').trim().toLowerCase();
+  if (rawOperation !== 'add' && rawOperation !== 'remove') {
+    throw new Error(`Invalid operation "${rawOperation}". Must be "add" or "remove".`);
+  }
+  const operation: 'add' | 'remove' = rawOperation;
+
+  const rawOwnerType = String(payload?.owner_type || 'user').trim().toLowerCase();
+  if (rawOwnerType !== 'user' && rawOwnerType !== 'group') {
+    throw new Error(`Invalid owner_type "${rawOwnerType}". Must be "user" or "group".`);
+  }
+  const ownerType: 'user' | 'group' = rawOwnerType;
+
   const ownerId = String(payload?.owner_id || '').trim();
 
   assertGroupIsManageable(groupId, ownedContext);
