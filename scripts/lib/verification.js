@@ -1,9 +1,9 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const { loadLocalBuildHash } = require('./gcp');
-const { parseJsonFromStdout, buildLookerCliFlags } = require('./prereqs');
+const { parseJsonFromStdout, runLookerCli } = require('./prereqs');
 
 function getRequiredCoreApiMethods() {
   const defaultMethods = ['me', 'all_users', 'user_roles', 'project_file'];
@@ -67,8 +67,8 @@ async function runPostDeploymentVerification(config, gcfUrl) {
       ? 'ALLOW_INTERNAL_ONLY'
       : 'ALLOW_ALL';
   try {
-    deployedHash = execSync(`gcloud functions describe ${config.gcf_name} --region=${config.gcp_region} --project=${config.gcp_project_id} --format="value(serviceConfig.environmentVariables.BUILD_HASH)"`, { encoding: 'utf8', stdio: 'pipe' }).trim();
-    ingressSettings = execSync(`gcloud functions describe ${config.gcf_name} --region=${config.gcp_region} --project=${config.gcp_project_id} --format="value(serviceConfig.ingressSettings)"`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+    deployedHash = execFileSync('gcloud', ['functions', 'describe', config.gcf_name, `--region=${config.gcp_region}`, `--project=${config.gcp_project_id}`, '--format=value(serviceConfig.environmentVariables.BUILD_HASH)'], { encoding: 'utf8', stdio: 'pipe' }).trim();
+    ingressSettings = execFileSync('gcloud', ['functions', 'describe', config.gcf_name, `--region=${config.gcp_region}`, `--project=${config.gcp_project_id}`, '--format=value(serviceConfig.ingressSettings)'], { encoding: 'utf8', stdio: 'pipe' }).trim();
     functionPass = (deployedHash === localHash && localHash !== '' && (!ingressSettings || ingressSettings === expectedIngressEnum));
   } catch (e) {}
 
@@ -92,7 +92,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
     let projectPass = false;
     let projectDetails = '';
     try {
-      const projOutput = execSync(`looker-cli api project project nano_admin ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' });
+      const projOutput = runLookerCli(['api', 'project', 'project', 'nano_admin'], inst);
       const proj = parseJsonFromStdout(projOutput);
       const exists = Boolean(proj && (proj.id === 'nano_admin' || proj.name === 'nano_admin'));
       if (!exists) {
@@ -113,7 +113,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
     let modelPass = false;
     let foundModel = null;
     try {
-      const modelsOutput = execSync(`looker-cli api lookmlmodel all_lookml_models ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' });
+      const modelsOutput = runLookerCli(['api', 'lookmlmodel', 'all_lookml_models'], inst);
       const models = parseJsonFromStdout(modelsOutput);
       foundModel = Array.isArray(models) && models.find(m => m.name === 'nano_admin' || m.project_name === 'nano_admin');
       modelPass = Boolean(foundModel);
@@ -133,7 +133,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
     let modelFileName = '';
     let modelFileDetails = '';
     try {
-      const filesOutput = execSync(`looker-cli api project all_project_files nano_admin ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' });
+      const filesOutput = runLookerCli(['api', 'project', 'all_project_files', 'nano_admin'], inst);
       const files = parseJsonFromStdout(filesOutput);
       if (Array.isArray(files)) {
         indexPass = files.some(f => f.id === 'index.md' || f.path === 'index.md');
@@ -144,7 +144,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
           modelFileName = mFile.id || mFile.path;
           let actualConnection = '';
           try {
-            const modelContent = execSync(`looker-cli project file cat nano_admin ${modelFileName} ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+            const modelContent = runLookerCli(['project', 'file', 'cat', 'nano_admin', modelFileName], inst).trim();
             const connMatch = modelContent.match(/connection:\s*"([^"]+)"/);
             actualConnection = connMatch ? connMatch[1] : '';
           } catch (e) {}
@@ -174,7 +174,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
         : inst.looker_host;
       const expectedRedirectUri = `https://${hostPort}/extensions/oauth2_redirect`;
       try {
-        const oauthOutput = execSync(`looker-cli api auth oauth_client_app nano_admin_oauth_client ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' });
+        const oauthOutput = runLookerCli(['api', 'auth', 'oauth_client_app', 'nano_admin_oauth_client'], inst);
         const oauthApp = parseJsonFromStdout(oauthOutput);
         if (oauthApp && oauthApp.client_guid === 'nano_admin_oauth_client') {
           if (oauthApp.enabled && oauthApp.redirect_uri === expectedRedirectUri) {
@@ -190,7 +190,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
       }
     } else {
       try {
-        const attrOutput = execSync(`looker-cli api userattribute all_user_attributes ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' });
+        const attrOutput = runLookerCli(['api', 'userattribute', 'all_user_attributes'], inst);
         const attributes = parseJsonFromStdout(attrOutput);
         const attr = Array.isArray(attributes) && attributes.find(a => a.name === 'nano_admin_admin_extension_nano_admin_challenge');
         if (attr) {
@@ -227,7 +227,7 @@ async function runPostDeploymentVerification(config, gcfUrl) {
     let manifestDetails = '';
     try {
       const gcsBundleUrl = `https://storage.googleapis.com/${config.gcs_bucket_name}/bundle.js`;
-      const prodManifestContent = execSync(`looker-cli project file cat nano_admin manifest.lkml ${buildLookerCliFlags(inst)}`, { encoding: 'utf8', stdio: 'pipe' }).trim();
+      const prodManifestContent = runLookerCli(['project', 'file', 'cat', 'nano_admin', 'manifest.lkml'], inst).trim();
       if (prodManifestContent) {
         const gcfUrlOrigin = gcfUrl ? gcfUrl.replace(/\/+$/, '') : '';
         const hasGcf = !gcfUrl || prodManifestContent.includes(gcfUrl);

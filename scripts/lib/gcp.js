@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { execSync, spawn } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 const crypto = require('crypto');
 const { computeBuildHash } = require('../generate-hash');
 
@@ -36,8 +36,9 @@ function resolveGcfUrl(config) {
   try {
     // For Gen 2 Cloud Functions, prefer the Cloud Run service URI (serviceConfig.uri)
     // as it is compatible with Looker Google Cloud core Controlled Native Egress.
-    const runUri = execSync(
-      `gcloud functions describe ${config.gcf_name} --region=${config.gcp_region} --project=${config.gcp_project_id} --format="value(serviceConfig.uri)"`,
+    const runUri = execFileSync(
+      'gcloud',
+      ['functions', 'describe', config.gcf_name, `--region=${config.gcp_region}`, `--project=${config.gcp_project_id}`, '--format=value(serviceConfig.uri)'],
       { encoding: 'utf8', stdio: 'pipe' }
     ).trim();
 
@@ -45,8 +46,9 @@ function resolveGcfUrl(config) {
       return runUri;
     }
 
-    const rawUrl = execSync(
-      `gcloud functions describe ${config.gcf_name} --region=${config.gcp_region} --project=${config.gcp_project_id} --format="value(url)"`,
+    const rawUrl = execFileSync(
+      'gcloud',
+      ['functions', 'describe', config.gcf_name, `--region=${config.gcp_region}`, `--project=${config.gcp_project_id}`, '--format=value(url)'],
       { encoding: 'utf8', stdio: 'pipe' }
     ).trim();
 
@@ -73,12 +75,12 @@ function checkSecretsExistInGCP(projectId, instances = []) {
     if (targetHosts.length > 0) {
       for (const host of targetHosts) {
         const sanitizedHost = sanitizeHostForSecret(host);
-        execSync(`gcloud secrets describe NANO_ADMIN_LOOKERSDK_CLIENT_ID_${sanitizedHost} --project=${projectId}`, { stdio: 'ignore' });
-        execSync(`gcloud secrets describe NANO_ADMIN_LOOKERSDK_CLIENT_SECRET_${sanitizedHost} --project=${projectId}`, { stdio: 'ignore' });
+        execFileSync('gcloud', ['secrets', 'describe', `NANO_ADMIN_LOOKERSDK_CLIENT_ID_${sanitizedHost}`, `--project=${projectId}`], { stdio: 'ignore' });
+        execFileSync('gcloud', ['secrets', 'describe', `NANO_ADMIN_LOOKERSDK_CLIENT_SECRET_${sanitizedHost}`, `--project=${projectId}`], { stdio: 'ignore' });
       }
       return true;
     }
-    const output = execSync(`gcloud secrets list --project=${projectId} --filter="name ~ NANO_ADMIN_LOOKERSDK_CLIENT_ID_" --format="value(name)"`, { encoding: 'utf8', stdio: 'pipe' });
+    const output = execFileSync('gcloud', ['secrets', 'list', `--project=${projectId}`, '--filter=name ~ NANO_ADMIN_LOOKERSDK_CLIENT_ID_', '--format=value(name)'], { encoding: 'utf8', stdio: 'pipe' });
     return output.trim().length > 0;
   } catch (e) {
     return false;
@@ -88,19 +90,19 @@ function checkSecretsExistInGCP(projectId, instances = []) {
 async function scanExistingResources(config, getLookerSaFn) {
   let gcpAccount = 'Unknown Account';
   try {
-    gcpAccount = execSync('gcloud config get-value account', { encoding: 'utf8' }).trim();
+    gcpAccount = execFileSync('gcloud', ['config', 'get-value', 'account'], { encoding: 'utf8' }).trim();
   } catch (e) {}
 
   console.log('\n🔎 Scanning GCP environment for existing resources...');
   let secretHmacExists = false;
   try {
-    execSync(`gcloud secrets describe GCF_HMAC_SECRET --project=${config.gcp_project_id}`, { stdio: 'ignore' });
+    execFileSync('gcloud', ['secrets', 'describe', 'GCF_HMAC_SECRET', `--project=${config.gcp_project_id}`], { stdio: 'ignore' });
     secretHmacExists = true;
   } catch (e) {}
 
   let functionExists = false;
   try {
-    execSync(`gcloud functions describe ${config.gcf_name} --region=${config.gcp_region} --project=${config.gcp_project_id}`, { stdio: 'ignore' });
+    execFileSync('gcloud', ['functions', 'describe', config.gcf_name, `--region=${config.gcp_region}`, `--project=${config.gcp_project_id}`], { stdio: 'ignore' });
     functionExists = true;
   } catch (e) {}
 
@@ -111,9 +113,9 @@ async function scanExistingResources(config, getLookerSaFn) {
   };
 }
 
-function executeDeployCommand(cmdStr) {
+function executeDeployCommand(command, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn('bash', ['-c', cmdStr], { stdio: ['inherit', 'pipe', 'pipe'] });
+    const child = spawn(command, args, { stdio: ['inherit', 'pipe', 'pipe'] });
     let stdoutBuffer = '';
     let stderrBuffer = '';
 
@@ -171,29 +173,29 @@ async function deployGCF(config, lookerCreds) {
   console.log('\n☁️ Setting up Google Cloud deployment...');
 
   console.log('\n📦 Compiling backend TypeScript code and generating build hash...');
-  execSync('npm run backend:build', { stdio: 'inherit' });
+  execFileSync('npm', ['run', 'backend:build'], { stdio: 'inherit' });
   syncBackendLockfile();
 
   const localBuildHash = loadLocalBuildHash();
   console.log(`Local Build Hash is: ${localBuildHash}`);
 
   console.log(`Setting active GCP project to ${config.gcp_project_id}...`);
-  execSync(`gcloud config set project ${config.gcp_project_id}`, { stdio: 'inherit' });
+  execFileSync('gcloud', ['config', 'set', 'project', config.gcp_project_id], { stdio: 'inherit' });
 
   console.log('Enabling required Google Cloud APIs (Function, Secret Manager, Cloud Build)...');
   try {
-    execSync('gcloud services enable cloudfunctions.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com secretmanager.googleapis.com', { stdio: 'inherit' });
+    execFileSync('gcloud', ['services', 'enable', 'cloudfunctions.googleapis.com', 'cloudbuild.googleapis.com', 'artifactregistry.googleapis.com', 'secretmanager.googleapis.com'], { stdio: 'inherit' });
   } catch (e) {
     console.warn('⚠️ Warning: Failed to enable services automatically. Make sure they are enabled in your GCP project.');
   }
 
-  const projectNumber = execSync(`gcloud projects describe ${config.gcp_project_id} --format="value(projectNumber)"`, { encoding: 'utf8' }).trim();
+  const projectNumber = execFileSync('gcloud', ['projects', 'describe', config.gcp_project_id, '--format=value(projectNumber)'], { encoding: 'utf8' }).trim();
   const defaultSa = `${projectNumber}-compute@developer.gserviceaccount.com`;
   console.log(`Default Compute Engine service account: ${defaultSa}`);
 
   console.log(`Ensuring Secret Accessor permission for default Compute Service Account: ${defaultSa}...`);
   try {
-    execSync(`gcloud projects add-iam-policy-binding ${config.gcp_project_id} --member="serviceAccount:${defaultSa}" --role="roles/secretmanager.secretAccessor"`, { stdio: 'ignore' });
+    execFileSync('gcloud', ['projects', 'add-iam-policy-binding', config.gcp_project_id, `--member=serviceAccount:${defaultSa}`, '--role=roles/secretmanager.secretAccessor'], { stdio: 'ignore' });
     console.log('✅ Granted roles/secretmanager.secretAccessor permission.');
   } catch (e) {
     console.warn('⚠️ Warning: Failed to grant project-level Secret Accessor permission automatically.');
@@ -207,20 +209,20 @@ async function deployGCF(config, lookerCreds) {
   try {
     let hasHmac = false;
     try {
-      execSync('gcloud secrets describe GCF_HMAC_SECRET', { stdio: 'ignore' });
+      execFileSync('gcloud', ['secrets', 'describe', 'GCF_HMAC_SECRET'], { stdio: 'ignore' });
       hasHmac = true;
       console.log('✅ GCF_HMAC_SECRET already exists in Secret Manager.');
     } catch (e) {
       console.log('Creating GCF_HMAC_SECRET secret in Secret Manager...');
       try {
-        execSync('gcloud secrets create GCF_HMAC_SECRET --replication-policy="automatic"', { stdio: 'inherit' });
+        execFileSync('gcloud', ['secrets', 'create', 'GCF_HMAC_SECRET', '--replication-policy=automatic'], { stdio: 'inherit' });
       } catch (err) {}
     }
 
     if (!hasHmac) {
       const hmacSecret = crypto.randomBytes(32).toString('hex');
       console.log('Adding new secret version for GCF_HMAC_SECRET...');
-      execSync(`echo -n "${hmacSecret}" | gcloud secrets versions add GCF_HMAC_SECRET --data-file=-`, { stdio: 'inherit' });
+      execFileSync('gcloud', ['secrets', 'versions', 'add', 'GCF_HMAC_SECRET', '--data-file=-'], { input: hmacSecret, stdio: ['pipe', 'inherit', 'inherit'] });
     }
 
     const instances = Array.isArray(config.instances) && config.instances.length > 0
@@ -239,14 +241,14 @@ async function deployGCF(config, lookerCreds) {
 
         if (creds && creds.client_id && creds.client_secret) {
           console.log(`Configuring Secret Manager secret ${clientIdSecret}...`);
-          try { execSync(`gcloud secrets describe ${clientIdSecret} --project=${config.gcp_project_id}`, { stdio: 'ignore' }); }
-          catch (e) { try { execSync(`gcloud secrets create ${clientIdSecret} --replication-policy="automatic" --project=${config.gcp_project_id}`, { stdio: 'inherit' }); } catch (err) {} }
-          execSync(`echo -n "${creds.client_id}" | gcloud secrets versions add ${clientIdSecret} --project=${config.gcp_project_id} --data-file=-`, { stdio: 'inherit' });
+          try { execFileSync('gcloud', ['secrets', 'describe', clientIdSecret, `--project=${config.gcp_project_id}`], { stdio: 'ignore' }); }
+          catch (e) { try { execFileSync('gcloud', ['secrets', 'create', clientIdSecret, '--replication-policy=automatic', `--project=${config.gcp_project_id}`], { stdio: 'inherit' }); } catch (err) {} }
+          execFileSync('gcloud', ['secrets', 'versions', 'add', clientIdSecret, `--project=${config.gcp_project_id}`, '--data-file=-'], { input: creds.client_id, stdio: ['pipe', 'inherit', 'inherit'] });
 
           console.log(`Configuring Secret Manager secret ${clientSecretSecret}...`);
-          try { execSync(`gcloud secrets describe ${clientSecretSecret} --project=${config.gcp_project_id}`, { stdio: 'ignore' }); }
-          catch (e) { try { execSync(`gcloud secrets create ${clientSecretSecret} --replication-policy="automatic" --project=${config.gcp_project_id}`, { stdio: 'inherit' }); } catch (err) {} }
-          execSync(`echo -n "${creds.client_secret}" | gcloud secrets versions add ${clientSecretSecret} --project=${config.gcp_project_id} --data-file=-`, { stdio: 'inherit' });
+          try { execFileSync('gcloud', ['secrets', 'describe', clientSecretSecret, `--project=${config.gcp_project_id}`], { stdio: 'ignore' }); }
+          catch (e) { try { execFileSync('gcloud', ['secrets', 'create', clientSecretSecret, '--replication-policy=automatic', `--project=${config.gcp_project_id}`], { stdio: 'inherit' }); } catch (err) {} }
+          execFileSync('gcloud', ['secrets', 'versions', 'add', clientSecretSecret, `--project=${config.gcp_project_id}`, '--data-file=-'], { input: creds.client_secret, stdio: ['pipe', 'inherit', 'inherit'] });
         } else {
           console.log(`✅ Reusing existing Secret Manager secrets for host: ${host} (${clientIdSecret}, ${clientSecretSecret})`);
         }
@@ -255,8 +257,8 @@ async function deployGCF(config, lookerCreds) {
         secretBindings.push(`${clientSecretSecret}=${clientSecretSecret}:latest`);
 
         try {
-          execSync(`gcloud secrets add-iam-policy-binding ${clientIdSecret} --member="serviceAccount:${defaultSa}" --role="roles/secretmanager.secretAccessor" --project=${config.gcp_project_id}`, { stdio: 'ignore' });
-          execSync(`gcloud secrets add-iam-policy-binding ${clientSecretSecret} --member="serviceAccount:${defaultSa}" --role="roles/secretmanager.secretAccessor" --project=${config.gcp_project_id}`, { stdio: 'ignore' });
+          execFileSync('gcloud', ['secrets', 'add-iam-policy-binding', clientIdSecret, `--member=serviceAccount:${defaultSa}`, '--role=roles/secretmanager.secretAccessor', `--project=${config.gcp_project_id}`], { stdio: 'ignore' });
+          execFileSync('gcloud', ['secrets', 'add-iam-policy-binding', clientSecretSecret, `--member=serviceAccount:${defaultSa}`, '--role=roles/secretmanager.secretAccessor', `--project=${config.gcp_project_id}`], { stdio: 'ignore' });
         } catch (e) {}
       }
     }
@@ -274,21 +276,25 @@ async function deployGCF(config, lookerCreds) {
   console.log(`Configuring instance allowlist: [${allowedInstances}]`);
   console.log(`Configuring instance auth modes: [${instanceAuthModesEnv}]`);
   console.log(`Configuring ingress settings: [${ingressSettings}]`);
-  const deployCommand = `gcloud functions deploy ${config.gcf_name} \\
-    --gen2 \\
-    --runtime=nodejs24 \\
-    --region=${config.gcp_region} \\
-    --trigger-http \\
-    --allow-unauthenticated \\
-    --ingress-settings=${ingressSettings} \\
-    --entry-point=nanoAdminBackend \\
-    --source=backend \\
-    --set-env-vars="^|^BUILD_HASH=${localBuildHash}|LOOKER_ALLOWED_INSTANCES=${allowedInstances}|LOOKER_INSTANCE_AUTH_MODES=${instanceAuthModesEnv}" \\
-    --set-secrets="${secretBindings.join(',')}"`;
+  const deployArgs = [
+    'functions',
+    'deploy',
+    config.gcf_name,
+    '--gen2',
+    '--runtime=nodejs24',
+    `--region=${config.gcp_region}`,
+    '--trigger-http',
+    '--allow-unauthenticated',
+    `--ingress-settings=${ingressSettings}`,
+    '--entry-point=nanoAdminBackend',
+    '--source=backend',
+    `--set-env-vars=^|^BUILD_HASH=${localBuildHash}|LOOKER_ALLOWED_INSTANCES=${allowedInstances}|LOOKER_INSTANCE_AUTH_MODES=${instanceAuthModesEnv}`,
+    `--set-secrets=${secretBindings.join(',')}`
+  ];
 
-  console.log(`Running deploy command:\n${deployCommand}\n`);
+  console.log(`Running deploy command:\ngcloud ${deployArgs.join(' ')}\n`);
   try {
-    await executeDeployCommand(deployCommand);
+    await executeDeployCommand('gcloud', deployArgs);
   } catch (error) {
     const isDrs = error.stderr && (
       error.stderr.includes('do not belong to a permitted customer') ||
@@ -318,12 +324,12 @@ async function deployExtensionToGCS(config) {
   console.log(`\n🪣 Configuring Google Cloud Storage Bucket: gs://${bucketName}...`);
 
   try {
-    execSync(`gcloud storage buckets describe gs://${bucketName} --project=${config.gcp_project_id}`, { stdio: 'ignore' });
+    execFileSync('gcloud', ['storage', 'buckets', 'describe', `gs://${bucketName}`, `--project=${config.gcp_project_id}`], { stdio: 'ignore' });
     console.log(`✅ Bucket gs://${bucketName} already exists.`);
   } catch (e) {
     console.log(`Creating new storage bucket gs://${bucketName}...`);
     try {
-      execSync(`gcloud storage buckets create gs://${bucketName} --location=${config.gcp_region} --project=${config.gcp_project_id}`, { stdio: 'inherit' });
+      execFileSync('gcloud', ['storage', 'buckets', 'create', `gs://${bucketName}`, `--location=${config.gcp_region}`, `--project=${config.gcp_project_id}`], { stdio: 'inherit' });
       console.log('✅ Bucket created successfully.');
     } catch (createErr) {
       console.error(`❌ Failed to create bucket: ${createErr.message}`);
@@ -333,7 +339,7 @@ async function deployExtensionToGCS(config) {
 
   console.log(`Setting public read access on bucket gs://${bucketName}...`);
   try {
-    execSync(`gcloud storage buckets add-iam-policy-binding gs://${bucketName} --member=allUsers --role=roles/storage.objectViewer --project=${config.gcp_project_id}`, { stdio: 'ignore' });
+    execFileSync('gcloud', ['storage', 'buckets', 'add-iam-policy-binding', `gs://${bucketName}`, '--member=allUsers', '--role=roles/storage.objectViewer', `--project=${config.gcp_project_id}`], { stdio: 'ignore' });
     console.log(`✅ Granted public read access to allUsers.`);
   } catch (iamErr) {
     console.warn(`⚠️ Warning: Failed to automatically set public read access. Ensure publicAccessPrevention is not enforced or configure the bucket policy manually.`);
@@ -351,7 +357,7 @@ async function deployExtensionToGCS(config) {
   ];
   fs.writeFileSync(corsPath, JSON.stringify(corsConfig, null, 2), 'utf8');
   try {
-    execSync(`gcloud storage buckets update gs://${bucketName} --cors-file="${corsPath}" --project=${config.gcp_project_id}`, { stdio: 'ignore' });
+    execFileSync('gcloud', ['storage', 'buckets', 'update', `gs://${bucketName}`, `--cors-file=${corsPath}`, `--project=${config.gcp_project_id}`], { stdio: 'ignore' });
     console.log(`✅ CORS policy configured successfully.`);
   } catch (corsErr) {
     console.warn(`⚠️ Warning: Failed to set CORS policy automatically: ${corsErr.message}`);
@@ -373,8 +379,8 @@ async function deployExtensionToGCS(config) {
   const uploadFiles = fs.existsSync(distDir)
     ? fs.readdirSync(distDir)
         .filter(file => publishMaps || !file.endsWith('.map'))
-        .map(file => `"${path.join('extension', 'dist', file)}"`)
-    : ['"extension/dist/*"'];
+        .map(file => path.join('extension', 'dist', file))
+    : [];
 
   if (uploadFiles.length === 0) {
     console.error('❌ No extension assets found in extension/dist to upload.');
@@ -383,10 +389,10 @@ async function deployExtensionToGCS(config) {
 
   try {
     try {
-      execSync(`gcloud storage cp -r ${uploadFiles.join(' ')} gs://${bucketName}/ --project=${config.gcp_project_id}`, { stdio: 'inherit' });
+      execFileSync('gcloud', ['storage', 'cp', '-r', ...uploadFiles, `gs://${bucketName}/`, `--project=${config.gcp_project_id}`], { stdio: 'inherit' });
     } catch (gcloudErr) {
       console.log('⚠️ gcloud storage upload failed. Trying fallback to gsutil...');
-      execSync(`gsutil cp -r ${uploadFiles.join(' ')} gs://${bucketName}/`, { stdio: 'inherit' });
+      execFileSync('gsutil', ['cp', '-r', ...uploadFiles, `gs://${bucketName}/`], { stdio: 'inherit' });
     }
     console.log(`✅ Successfully uploaded extension assets to GCS.`);
   } catch (uploadErr) {
@@ -441,7 +447,7 @@ function resolveInstanceAuthModesEnv(instances, fallbackHost, fallbackPort, fall
 function syncBackendLockfile() {
   console.log('🔒 Synchronizing backend/package-lock.json for Cloud Functions deployment...');
   try {
-    execSync('npm --prefix backend install --package-lock-only --no-workspaces', { stdio: 'inherit' });
+    execFileSync('npm', ['--prefix', 'backend', 'install', '--package-lock-only', '--no-workspaces'], { stdio: 'inherit' });
   } catch (err) {
     console.warn(`⚠️ Warning: Failed to generate backend/package-lock.json: ${err.message}`);
   }

@@ -1,4 +1,4 @@
-const { execSync, spawn } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 const { askQuestion } = require('./ui');
 
 function parseJsonFromStdout(stdout) {
@@ -63,7 +63,7 @@ async function checkGCPAuth() {
 
   while (!authenticated) {
     try {
-      execSync('gcloud auth print-access-token', { stdio: 'pipe' });
+      execFileSync('gcloud', ['auth', 'print-access-token'], { stdio: 'pipe' });
       authenticated = true;
       console.log('✅ Google Cloud session is active and valid.');
     } catch (err) {
@@ -88,8 +88,8 @@ function validateLocalTooling() {
   console.log('🔍 Validating local tooling (fast local checks)...');
 
   try {
-    execSync('node --version', { stdio: 'ignore' });
-    execSync('npm --version', { stdio: 'ignore' });
+    execFileSync('node', ['--version'], { stdio: 'ignore' });
+    execFileSync('npm', ['--version'], { stdio: 'ignore' });
   } catch (e) {
     console.error('❌ Error: Node.js and npm are required but were not found.');
     console.error('Please install Node.js (v18+) and npm before running this script.');
@@ -97,7 +97,7 @@ function validateLocalTooling() {
   }
 
   try {
-    execSync('gcloud --version', { stdio: 'ignore' });
+    execFileSync('gcloud', ['--version'], { stdio: 'ignore' });
   } catch (e) {
     console.error('❌ Error: Google Cloud CLI (gcloud) is required but was not found.');
     console.error('Please install the Google Cloud SDK: https://cloud.google.com/sdk/docs/install');
@@ -105,7 +105,7 @@ function validateLocalTooling() {
   }
 
   try {
-    execSync('looker-cli version', { stdio: 'ignore' });
+    execFileSync('looker-cli', ['version'], { stdio: 'ignore' });
   } catch (e) {
     console.error('❌ Error: looker-cli is required but was not found in your PATH.');
     console.error('Please make sure looker-cli is installed and added to your PATH.');
@@ -139,7 +139,7 @@ function getLookerCliProfiles(forceRefresh = false) {
   }
   const profiles = [];
   try {
-    const output = execSync('looker-cli profile ls', { encoding: 'utf8', stdio: 'pipe' });
+    const output = execFileSync('looker-cli', ['profile', 'ls'], { encoding: 'utf8', stdio: 'pipe' });
     const lines = output.split('\n');
     for (const line of lines) {
       const trimmed = line.trim();
@@ -191,7 +191,7 @@ function resolveLookerProfileName(connectionConfig = {}) {
   const newProfileName = connectionConfig.looker_profile || deriveProfileNameFromHost(targetHost, profiles);
   const port = String(connectionConfig.looker_port || '443').trim();
   try {
-    execSync(`looker-cli profile add ${newProfileName} --host=${targetHost} --port=${port}`, { stdio: 'pipe' });
+    execFileSync('looker-cli', ['profile', 'add', newProfileName, `--host=${targetHost}`, `--port=${port}`], { stdio: 'pipe' });
     getLookerCliProfiles(true);
     return newProfileName;
   } catch (e) {
@@ -199,36 +199,52 @@ function resolveLookerProfileName(connectionConfig = {}) {
   }
 }
 
-function buildLookerCliFlags(connectionConfig = {}) {
+function buildLookerCliFlagArgs(connectionConfig = {}) {
   const profileName = resolveLookerProfileName(connectionConfig);
-  const profilePart = profileName ? `--profile=${profileName} ` : '';
-  return `${profilePart}--host=${connectionConfig.looker_host} --port=${connectionConfig.looker_port} --ssl=${connectionConfig.looker_ssl}`;
+  const args = [];
+  if (profileName) {
+    args.push(`--profile=${profileName}`);
+  }
+  if (connectionConfig.looker_host !== undefined) {
+    args.push(`--host=${connectionConfig.looker_host}`);
+  }
+  if (connectionConfig.looker_port !== undefined) {
+    args.push(`--port=${connectionConfig.looker_port}`);
+  }
+  if (connectionConfig.looker_ssl !== undefined) {
+    args.push(`--ssl=${connectionConfig.looker_ssl}`);
+  }
+  return args;
+}
+
+function runLookerCli(args, connectionConfig = {}, options = {}) {
+  const cliArgs = [...args, ...buildLookerCliFlagArgs(connectionConfig)];
+  return execFileSync('looker-cli', cliArgs, {
+    encoding: 'utf8',
+    stdio: 'pipe',
+    ...options
+  });
 }
 
 async function ensureLookerLoggedIn(connectionConfig) {
   const profileName = resolveLookerProfileName(connectionConfig);
-  const cliFlags = buildLookerCliFlags(connectionConfig);
   console.log(`\n🔑 Checking Looker session status for host ${connectionConfig.looker_host}${profileName ? ` (profile: ${profileName})` : ''}...`);
   let loggedIn = false;
   let lookerUser = 'Unknown User';
 
   try {
-    const userMeOutput = execSync(`looker-cli api user me ${cliFlags}`, { encoding: 'utf8', stdio: 'pipe' });
+    const userMeOutput = runLookerCli(['api', 'user', 'me'], connectionConfig);
     const userMe = parseJsonFromStdout(userMeOutput);
     lookerUser = `${userMe.display_name || userMe.first_name + ' ' + userMe.last_name} (${userMe.email})`;
     loggedIn = true;
   } catch (e) {
     console.log(`Not authenticated with Looker host ${connectionConfig.looker_host}. Initiating login via OAuth PKCE...`);
-    const loginArgs = ['session', 'login', '--oauth'];
-    if (profileName) {
-      loginArgs.push(`--profile=${profileName}`);
-    }
-    loginArgs.push(`--host=${connectionConfig.looker_host}`, `--port=${connectionConfig.looker_port}`, `--ssl=${connectionConfig.looker_ssl}`);
-    
+    const loginArgs = ['session', 'login', '--oauth', ...buildLookerCliFlagArgs(connectionConfig)];
+
     await runCommandFiltered('looker-cli', loginArgs);
 
     try {
-      const userMeOutput = execSync(`looker-cli api user me ${cliFlags}`, { encoding: 'utf8', stdio: 'pipe' });
+      const userMeOutput = runLookerCli(['api', 'user', 'me'], connectionConfig);
       const userMe = parseJsonFromStdout(userMeOutput);
       lookerUser = `${userMe.display_name || userMe.first_name + ' ' + userMe.last_name} (${userMe.email})`;
       loggedIn = true;
@@ -254,6 +270,7 @@ module.exports = {
   checkPrerequisites,
   getLookerCliProfiles,
   resolveLookerProfileName,
-  buildLookerCliFlags,
+  buildLookerCliFlagArgs,
+  runLookerCli,
   ensureLookerLoggedIn
 };

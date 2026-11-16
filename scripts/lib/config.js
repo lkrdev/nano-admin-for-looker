@@ -1,8 +1,8 @@
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 const { askQuestion } = require('./ui');
-const { getLookerCliProfiles, resolveLookerProfileName, buildLookerCliFlags } = require('./prereqs');
+const { getLookerCliProfiles, resolveLookerProfileName, runLookerCli } = require('./prereqs');
 
 function loadEnvFile() {
   const rootDir = path.join(__dirname, '..', '..');
@@ -37,11 +37,11 @@ function getLocalGCPDefaults() {
   let defaultProject = '';
   let defaultAccount = '';
   try {
-    defaultProject = execSync('gcloud config get-value project', { encoding: 'utf8', stdio: 'pipe' }).trim();
+    defaultProject = execFileSync('gcloud', ['config', 'get-value', 'project'], { encoding: 'utf8', stdio: 'pipe' }).trim();
     if (defaultProject.includes('(unset)')) defaultProject = '';
   } catch (e) {}
   try {
-    defaultAccount = execSync('gcloud config get-value account', { encoding: 'utf8', stdio: 'pipe' }).trim();
+    defaultAccount = execFileSync('gcloud', ['config', 'get-value', 'account'], { encoding: 'utf8', stdio: 'pipe' }).trim();
     if (defaultAccount.includes('(unset)')) defaultAccount = '';
   } catch (e) {}
   return { defaultProject, defaultAccount };
@@ -350,7 +350,7 @@ async function promptLookerServiceAccount(connectionConfig, gcpConfig, existingC
   console.log(`\n🔎 Inspecting Looker host ${connectionConfig.looker_host} for existing service accounts...`);
   let matchedSAs = [];
   try {
-    const out = execSync(`looker-cli api user search_users --is_service_account=true ${buildLookerCliFlags(connectionConfig)}`, { encoding: 'utf8', stdio: 'pipe' });
+    const out = runLookerCli(['api', 'user', 'search_users', '--is_service_account=true'], connectionConfig);
     const users = JSON.parse(out);
     if (users && users.length > 0) {
       matchedSAs = users.filter((u) => {

@@ -5,6 +5,7 @@ build/
 .env.local
 *.log
 .DS_Store
+.cm_project
 looker.ini
 # Compiled JavaScript files in typescript projects (where appropriate)
 # backend/dist/
