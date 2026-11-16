@@ -220,10 +220,9 @@ export const handler = async (
     }
 
     if (limitation.active && meta.userIdParamName && Array.isArray(items)) {
-      const userKey = meta.userIdParamName;
       return items.filter(item => {
-        const ownerId = String(item[userKey] ?? item.user?.id ?? item.id ?? '');
-        return limitation.userIds.includes(ownerId);
+        const ownerId = extractOwnerUserId(item, meta);
+        return ownerId !== '' && limitation.userIds.includes(ownerId);
       });
     }
 
@@ -239,8 +238,8 @@ export const handler = async (
     const item = await sdk.ok(sdkMethod.call(sdk, id, fields));
 
     if (limitation.active && meta.userIdParamName && item) {
-      const ownerId = String(item[meta.userIdParamName] ?? item.user?.id ?? item.id ?? '');
-      if (!limitation.userIds.includes(ownerId)) {
+      const ownerId = extractOwnerUserId(item, meta);
+      if (!ownerId || !limitation.userIds.includes(ownerId)) {
         throw new Error(`403 Forbidden: Target ${meta.singular} does not belong to an allowed user scope`);
       }
     }
@@ -278,8 +277,8 @@ export const handler = async (
       const readMethodName = meta.operations.read;
       if (readMethodName && typeof sdk[readMethodName] === 'function') {
         const existing = await sdk.ok(sdk[readMethodName].call(sdk, id));
-        const ownerId = String(existing[meta.userIdParamName] ?? existing.user?.id ?? existing.id ?? '');
-        if (!limitation.userIds.includes(ownerId)) {
+        const ownerId = extractOwnerUserId(existing, meta);
+        if (!ownerId || !limitation.userIds.includes(ownerId)) {
           throw new Error(`403 Forbidden: Target ${meta.singular} does not belong to an allowed user scope`);
         }
       }
@@ -308,8 +307,8 @@ export const handler = async (
       const readMethodName = meta.operations.read;
       if (readMethodName && typeof sdk[readMethodName] === 'function') {
         const existing = await sdk.ok(sdk[readMethodName].call(sdk, id));
-        const ownerId = String(existing[meta.userIdParamName] ?? existing.user?.id ?? existing.id ?? '');
-        if (!limitation.userIds.includes(ownerId)) {
+        const ownerId = extractOwnerUserId(existing, meta);
+        if (!ownerId || !limitation.userIds.includes(ownerId)) {
           throw new Error(`403 Forbidden: Target ${meta.singular} does not belong to an allowed user scope`);
         }
       }
@@ -323,6 +322,22 @@ export const handler = async (
 };
 
 // --- Helper Functions ---
+
+/**
+ * Extracts the owning user ID for a Looker resource without falling back to the
+ * resource's own `id` on non-user objects (preventing ID collision bypasses on unowned/global resources).
+ */
+function extractOwnerUserId(item: any, meta: TargetMeta): string {
+  if (!item || !meta.userIdParamName) return '';
+  const direct = item[meta.userIdParamName];
+  if (direct !== undefined && direct !== null && String(direct) !== '') {
+    return String(direct);
+  }
+  if (meta.userIdParamName !== 'id' && item.user?.id !== undefined && item.user?.id !== null && String(item.user.id) !== '') {
+    return String(item.user.id);
+  }
+  return '';
+}
 
 /**
  * Validates and constructs a Looker mutation body from untrusted payload input,
