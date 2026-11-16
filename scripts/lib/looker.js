@@ -326,7 +326,25 @@ async function configureLookerAttribute(config, gcfUrl) {
 
       const isWhitelisted = existingAllowlistStr.includes(domainOrigin) || (gcfUrl && existingAllowlistStr.includes(gcfUrl));
       if (isWhitelisted) {
-        console.log(`✅ Looker user attribute "${attrName}" on ${config.looker_host} is already whitelisted for domain: ${domainOrigin}`);
+        if (!existingAttr.value_is_hidden || existingAttr.user_can_view !== false || existingAttr.user_can_edit !== false) {
+          console.log(`Updating user attribute "${attrName}" on ${config.looker_host} to enforce hidden, non-viewable, non-editable flags...`);
+          try {
+            const updatePayload = JSON.stringify({
+              name: existingAttr.name,
+              label: existingAttr.label || 'Nano Admin Challenge',
+              type: existingAttr.type || 'string',
+              value_is_hidden: true,
+              user_can_view: false,
+              user_can_edit: false
+            });
+            execSync(`echo '${updatePayload}' | looker-cli api userattribute update_user_attribute ${existingAttr.id} - ${buildLookerCliFlags(config)}`, { stdio: 'pipe' });
+            console.log(`✅ Updated user attribute "${attrName}" security flags on ${config.looker_host}.`);
+          } catch (updErr) {
+            console.warn(`⚠️ Warning: Could not update existing user attribute security flags: ${updErr.message}`);
+          }
+        } else {
+          console.log(`✅ Looker user attribute "${attrName}" on ${config.looker_host} is already configured with domain whitelist: ${domainOrigin}`);
+        }
         return;
       }
 
@@ -343,7 +361,7 @@ async function configureLookerAttribute(config, gcfUrl) {
   console.log(`Creating user attribute "${attrName}" on ${config.looker_host} with domain whitelist: ${domainOrigin}`);
 
   try {
-    const cmd = `looker-cli attribute create ${attrName} "Nano Admin Challenge" --is-hidden --type=string --domain-allowlist="${domainOrigin}" --default-value="init_challenge" ${buildLookerCliFlags(config)}`;
+    const cmd = `looker-cli attribute create ${attrName} "Nano Admin Challenge" --is-hidden --can-view=false --can-edit=false --type=string --domain-allowlist="${domainOrigin}" --default-value="init_challenge" ${buildLookerCliFlags(config)}`;
     execSync(cmd, { stdio: 'pipe' });
     console.log(`✅ Successfully configured Looker user attribute on ${config.looker_host}.`);
   } catch (e) {

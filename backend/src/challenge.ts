@@ -130,8 +130,8 @@ export async function getChallengeAttributeId(sdk: LookerBackendSDK | any, insta
       const logHost = formatHostForLog(cacheKey) || 'instance';
       // Pull attribute's domain whitelist and value_is_hidden to verify and enforce security
       const fullAttr = await sdk.ok(sdk.user_attribute(attr.id));
-      if (!fullAttr.value_is_hidden) {
-        console.warn(`⚠️ Security warning: Looker User Attribute "${fullAttr.name}" on ${logHost} is NOT marked as hidden! Enforcing value_is_hidden: true...`);
+      if (!fullAttr.value_is_hidden || fullAttr.user_can_view === true || fullAttr.user_can_edit === true) {
+        console.warn(`⚠️ Security warning: Looker User Attribute "${fullAttr.name}" on ${logHost} has insecure visibility/edit flags (value_is_hidden=${fullAttr.value_is_hidden}, user_can_view=${fullAttr.user_can_view}, user_can_edit=${fullAttr.user_can_edit}). Enforcing hidden, non-viewable, non-editable...`);
         if (typeof sdk.update_user_attribute === 'function') {
           const updatedAttr = await sdk.ok(
             sdk.update_user_attribute(attr.id, {
@@ -139,6 +139,7 @@ export async function getChallengeAttributeId(sdk: LookerBackendSDK | any, insta
               label: fullAttr.label || 'Nano Admin Challenge',
               type: fullAttr.type || 'string',
               value_is_hidden: true,
+              user_can_view: false,
               user_can_edit: false,
               hidden_value_domain_whitelist: fullAttr.hidden_value_domain_whitelist
             })

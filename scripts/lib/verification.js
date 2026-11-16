@@ -204,10 +204,15 @@ async function runPostDeploymentVerification(config, gcfUrl) {
             }
           } catch (e) {}
 
-          if (!gcfUrl || allowlistStr.includes(domainOrigin) || allowlistStr.includes(gcfUrl)) {
+          const isWhitelisted = !gcfUrl || allowlistStr.includes(domainOrigin) || allowlistStr.includes(gcfUrl);
+          const isLockedDown = attr.value_is_hidden === true && attr.user_can_view === false && attr.user_can_edit === false;
+
+          if (isWhitelisted && isLockedDown) {
             attrPass = true;
-          } else {
+          } else if (!isWhitelisted) {
             attrDetails = `(Missing ${domainOrigin} in domain allowlist: [${allowlistStr}])`;
+          } else {
+            attrDetails = `(Insecure flags: value_is_hidden=${attr.value_is_hidden}, user_can_view=${attr.user_can_view}, user_can_edit=${attr.user_can_edit})`;
           }
         } else {
           attrDetails = `(User attribute 'nano_admin_admin_extension_nano_admin_challenge' not found)`;

@@ -133,7 +133,7 @@ function printDeploymentPreview(config, lookerUsers, status) {
     if (inst.auth_mode === 'oauth') {
       console.log(`      ${branchChar} [Instance ${idx + 1}] OAuth Client ('nano_admin_oauth_client'): [REGISTER / VERIFY REDIRECT URI]`);
     } else {
-      console.log(`      ${branchChar} [Instance ${idx + 1}] User Attribute ('nano_admin_admin_extension_nano_admin_challenge'): [CREATE / VERIFY DOMAIN ALLOWLIST]`);
+      console.log(`      ${branchChar} [Instance ${idx + 1}] User Attribute ('nano_admin_admin_extension_nano_admin_challenge'): [CREATE OR UPDATE]`);
     }
   });
   console.log(`  [ ] Upload Extension Assets to GCS:`);
