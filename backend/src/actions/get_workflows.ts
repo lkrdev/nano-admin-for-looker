@@ -1,6 +1,6 @@
 import fs from 'fs';
-import path from 'path';
 import { getWorkflows, getUserGroups, resolveAuthorizedGroups } from '../auth_utils';
+import { resolveTemplateSubpath } from './execute_workflow';
 import { ActionContext } from './registry';
 import { LookerBackendSDK } from '../looker_logging_sdk';
 
@@ -36,15 +36,18 @@ export async function getWorkflowsHandler(sdk: LookerBackendSDK, userId: string,
   };
 }
 
-function getTemplateManifest(templateId: string): any {
+/**
+ * Loads `manifest.json` for a validated template ID within `workflow-templates`.
+ */
+export function getTemplateManifest(templateId: unknown): any {
   try {
-    const manifestPath = path.resolve(__dirname, '..', 'workflow-templates', templateId, 'manifest.json');
+    const manifestPath = resolveTemplateSubpath(templateId, 'manifest.json');
     if (fs.existsSync(manifestPath)) {
       const content = fs.readFileSync(manifestPath, 'utf8');
       return JSON.parse(content);
     }
-  } catch (e) {
-    console.warn(`Failed to read manifest for template "${templateId}":`, e);
+  } catch (e: any) {
+    console.warn(`Failed to read manifest for template "${String(templateId ?? '')}":`, e?.message || e);
   }
   return {};
 }

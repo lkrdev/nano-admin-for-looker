@@ -96,16 +96,24 @@ export const executeWorkflowHandler: ActionHandler = async (sdk, userId, reqBody
   }
 };
 
-export function resolveTemplateBackendPath(templateId: unknown, workflowId: string): string {
+/**
+ * Validates a workflow template ID against `^[-a-z0-9]{1,50}$` and resolves a
+ * subpath strictly within the `workflow-templates` directory.
+ */
+export function resolveTemplateSubpath(templateId: unknown, subpath: string, workflowId?: string): string {
   if (!templateId || typeof templateId !== 'string' || !VALID_TEMPLATE_ID_REGEX.test(templateId)) {
-    throw { status: 400, message: `Workflow "${workflowId}" specifies an invalid template identifier.` };
+    throw { status: 400, message: `Workflow "${workflowId || 'unknown'}" specifies an invalid template identifier.` };
   }
 
   const templatesRoot = path.resolve(__dirname, '..', 'workflow-templates');
-  const resolvedBackendPath = path.resolve(templatesRoot, templateId, 'backend');
-  if (!resolvedBackendPath.startsWith(templatesRoot + path.sep)) {
-    throw { status: 400, message: `Workflow "${workflowId}" specifies an invalid template identifier.` };
+  const resolvedPath = path.resolve(templatesRoot, templateId, subpath);
+  if (!resolvedPath.startsWith(templatesRoot + path.sep)) {
+    throw { status: 400, message: `Workflow "${workflowId || 'unknown'}" specifies an invalid template identifier.` };
   }
 
-  return resolvedBackendPath;
+  return resolvedPath;
+}
+
+export function resolveTemplateBackendPath(templateId: unknown, workflowId: string): string {
+  return resolveTemplateSubpath(templateId, 'backend', workflowId);
 }
