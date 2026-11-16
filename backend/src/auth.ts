@@ -6,6 +6,7 @@ import {
   FetchLookerUserFn,
   InstanceAuthMode,
   resolveInstanceAuthMode,
+  sanitizeLookerHost,
   verifyLookerOAuthToken
 } from './oauth';
 
@@ -35,14 +36,6 @@ export function isHostAllowed(host: string, allowedInstancesEnv?: string): boole
   return allowedList.includes(host.trim().toLowerCase());
 }
 
-function sanitizeHost(rawHost: string): string {
-  if (!rawHost) return '';
-  let cleaned = rawHost.trim().toLowerCase();
-  cleaned = cleaned.replace(/^https?:\/\//, '');
-  cleaned = cleaned.replace(/\/.*$/, '');
-  return cleaned;
-}
-
 function hashForLog(value: string): string {
   if (!value) return 'none';
   return crypto.createHash('sha256').update(value).digest('hex').substring(0, 16) + '...';
@@ -56,7 +49,7 @@ export function authenticateRequest(req: ff.Request): AuthenticationResult {
   console.log(`[DEBUG] authenticateRequest: Incoming headers - Authorization present: ${!!authHeader}, X-Looker-User-ID: "${lookerUserIdHeader}", X-Looker-Instance-Host present: ${!!rawInstanceHostHeader}`);
 
   const rawHost = String(rawInstanceHostHeader || '').trim();
-  const sanitizedHost = sanitizeHost(rawHost);
+  const sanitizedHost = sanitizeLookerHost(rawHost);
   const configuredMode = resolveInstanceAuthMode(sanitizedHost);
   const effectiveMode: InstanceAuthMode = authHeader?.startsWith('Bearer ') ? 'oauth' : configuredMode;
 
@@ -104,7 +97,7 @@ export async function authenticateRequestAsync(
   const rawInstanceHostHeader = req.headers['x-looker-instance-host'] || req.headers['x-looker-host'];
 
   const rawHost = String(rawInstanceHostHeader || '').trim();
-  const sanitizedHost = sanitizeHost(rawHost);
+  const sanitizedHost = sanitizeLookerHost(rawHost);
 
   if (authHeader && authHeader.startsWith('Bearer ')) {
     if (!isHostAllowed(sanitizedHost, process.env.LOOKER_ALLOWED_INSTANCES)) {
