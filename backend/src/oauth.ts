@@ -69,11 +69,32 @@ export function resolveInstanceAuthMode(host: string, authModesEnv?: string): In
 }
 
 export function sanitizeLookerHost(rawHost: string): string {
-  if (!rawHost) return '';
+  if (!rawHost || typeof rawHost !== 'string') return '';
   let cleaned = rawHost.trim().toLowerCase();
   cleaned = cleaned.replace(/^https?:\/\//, '');
   cleaned = cleaned.replace(/\/.*$/, '');
-  return cleaned;
+
+  // Reject userinfo, query, fragment, backslash, or whitespace characters before URL parsing
+  if (!cleaned || /[@?#\\\s]/.test(cleaned)) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(`https://${cleaned}`);
+    if (
+      parsed.protocol !== 'https:' ||
+      parsed.username !== '' ||
+      parsed.password !== '' ||
+      parsed.pathname !== '/' ||
+      parsed.search !== '' ||
+      parsed.hash !== ''
+    ) {
+      return '';
+    }
+    return parsed.host.toLowerCase();
+  } catch {
+    return '';
+  }
 }
 
 export function extractTargetHostFromRedirectUri(redirectUri: string): { host: string | null; error?: string } {
@@ -196,7 +217,7 @@ export async function handleOAuthTokenExchange(
       });
       return;
     }
-    targetHost = extracted.host;
+    targetHost = sanitizeLookerHost(extracted.host || '') || null;
   } else {
     const rawFallbackHost = String(
       req.query?.instance_host ||
@@ -264,7 +285,7 @@ export async function verifyLookerOAuthToken(
   const cleanToken = (accessToken || '').trim();
   const cleanExpectedUser = (expectedUserId || '').trim();
 
-  if (!cleanHost || !cleanToken) {
+  if (!cleanHost || !cleanToken || !isHostAllowed(cleanHost, process.env.LOOKER_ALLOWED_INSTANCES)) {
     return { status: 'invalid', userId: cleanExpectedUser };
   }
 
@@ -316,6 +337,15 @@ export async function verifyLookerOAuthToken(
 function defaultHttpFormPost(urlStr: string, formBody: string): Promise<{ statusCode: number; body: string }> {
   return new Promise((resolve, reject) => {
     const url = new URL(urlStr);
+    if (
+      url.protocol !== 'https:' ||
+      url.username !== '' ||
+      url.password !== '' ||
+      url.pathname !== '/api/token'
+    ) {
+      reject(new Error('Invalid OAuth token endpoint URL.'));
+      return;
+    }
     const bodyBuffer = Buffer.from(formBody, 'utf8');
     const options: https.RequestOptions = {
       method: 'POST',
@@ -351,7 +381,12 @@ function defaultHttpFormPost(urlStr: string, formBody: string): Promise<{ status
 
 function defaultFetchLookerUser(host: string, accessToken: string): Promise<{ statusCode: number; body: string }> {
   return new Promise((resolve, reject) => {
-    const url = new URL(`https://${host}/api/4.0/user?fields=id`);
+    const cleanHost = sanitizeLookerHost(host);
+    if (!cleanHost) {
+      reject(new Error('Invalid Looker instance host.'));
+      return;
+    }
+    const url = new URL('/api/4.0/user?fields=id', `https://${cleanHost}`);
     const options: https.RequestOptions = {
       method: 'GET',
       headers: {

@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {
   resolveInstanceAuthMode,
   extractTargetHostFromRedirectUri,
+  sanitizeLookerHost,
   verifyLookerOAuthToken,
   clearOAuthTokenCache,
   handleOAuthAuthorize,
@@ -46,8 +47,11 @@ test('extractTargetHostFromRedirectUri — validates HTTPS and /extensions/oauth
   assert.match(invalidProto.error || '', /https is required/i);
 });
 
-test('verifyLookerOAuthToken — verifies user ID and caches verified tokens', async () => {
+test('verifyLookerOAuthToken — verifies user ID, enforces host allowlist, and blocks SSRF host injection', async () => {
   clearOAuthTokenCache();
+  const prevAllowed = process.env.LOOKER_ALLOWED_INSTANCES;
+  process.env.LOOKER_ALLOWED_INSTANCES = 'private.looker.app';
+
   let fetchCalls = 0;
   const mockFetchUser = async (_host: string, token: string) => {
     fetchCalls++;
@@ -57,24 +61,40 @@ test('verifyLookerOAuthToken — verifies user ID and caches verified tokens', a
     return { statusCode: 401, body: JSON.stringify({ message: 'Unauthorized' }) };
   };
 
-  // 1. Valid token matching expectedUserId
-  const res1 = await verifyLookerOAuthToken('private.looker.app', 'valid_access_token', '42', mockFetchUser);
-  assert.equal(res1.status, 'valid');
-  assert.equal(res1.userId, '42');
-  assert.equal(fetchCalls, 1);
+  try {
+    // 1. Valid token matching expectedUserId
+    const res1 = await verifyLookerOAuthToken('private.looker.app', 'valid_access_token', '42', mockFetchUser);
+    assert.equal(res1.status, 'valid');
+    assert.equal(res1.userId, '42');
+    assert.equal(fetchCalls, 1);
 
-  // 2. Subsequent verification uses cache (no extra network call)
-  const res2 = await verifyLookerOAuthToken('private.looker.app', 'valid_access_token', '42', mockFetchUser);
-  assert.equal(res2.status, 'valid');
-  assert.equal(fetchCalls, 1);
+    // 2. Subsequent verification uses cache (no extra network call)
+    const res2 = await verifyLookerOAuthToken('private.looker.app', 'valid_access_token', '42', mockFetchUser);
+    assert.equal(res2.status, 'valid');
+    assert.equal(fetchCalls, 1);
 
-  // 3. Mismatched user ID is rejected even when token is cached
-  const mismatch = await verifyLookerOAuthToken('private.looker.app', 'valid_access_token', '99', mockFetchUser);
-  assert.equal(mismatch.status, 'invalid');
+    // 3. Mismatched user ID is rejected even when token is cached
+    const mismatch = await verifyLookerOAuthToken('private.looker.app', 'valid_access_token', '99', mockFetchUser);
+    assert.equal(mismatch.status, 'invalid');
 
-  // 4. Invalid token fails
-  const invalid = await verifyLookerOAuthToken('private.looker.app', 'bad_token', '42', mockFetchUser);
-  assert.equal(invalid.status, 'invalid');
+    // 4. Invalid token fails
+    const invalid = await verifyLookerOAuthToken('private.looker.app', 'bad_token', '42', mockFetchUser);
+    assert.equal(invalid.status, 'invalid');
+
+    // 5. SSRF / userinfo / query / fragment / non-allowlisted hosts are rejected with 0 outbound calls
+    assert.equal(sanitizeLookerHost('private.looker.app@evil.com'), '');
+    assert.equal(sanitizeLookerHost('private.looker.app?foo=bar'), '');
+    assert.equal(sanitizeLookerHost('private.looker.app#frag'), '');
+    assert.equal(sanitizeLookerHost('private.looker.app\\evil.com'), '');
+    const callsBeforeSsrf = fetchCalls;
+    const ssrf1 = await verifyLookerOAuthToken('private.looker.app@evil.com', 'valid_access_token', '42', mockFetchUser);
+    const ssrf2 = await verifyLookerOAuthToken('unlisted.looker.app', 'valid_access_token', '42', mockFetchUser);
+    assert.equal(ssrf1.status, 'invalid');
+    assert.equal(ssrf2.status, 'invalid');
+    assert.equal(fetchCalls, callsBeforeSsrf);
+  } finally {
+    process.env.LOOKER_ALLOWED_INSTANCES = prevAllowed;
+  }
 });
 
 test('authenticateRequestAsync — supports both OAuth Bearer and Server Proxy challenge modes', async () => {
