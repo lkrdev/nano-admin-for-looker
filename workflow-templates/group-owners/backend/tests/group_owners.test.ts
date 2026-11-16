@@ -392,8 +392,39 @@ test('group-owners: child subgroup mutations enforce hierarchy cycle detection a
     /400 Bad Request: Cannot add an ancestor group as a child subgroup \(cycle detected\)/i
   );
 
-  // 2. Adding available group '40' as a child of '20' succeeds
-  const addChildRes = await handler(ctx, 'add_child_group', { parent_group_id: '20', child_group_id: '40' });
+  // 2. Adding unowned group '40' or another owner's group '30' as a child is blocked (403)
+  await assert.rejects(
+    async () => await handler(ctx, 'add_child_group', { parent_group_id: '20', child_group_id: '40' }),
+    /403 Forbidden: Group "40" is not in the invoking user's owned group hierarchy/i
+  );
+  await assert.rejects(
+    async () => await handler(ctx, 'add_child_group', { parent_group_id: '20', child_group_id: '30' }),
+    /403 Forbidden: Group "30" is not in the invoking user's owned group hierarchy/i
+  );
+
+  // 3. Adding a group that the invoking user also owns succeeds
+  const sdkBothOwned = buildMockLookerSdk({
+    all_user_attribute_group_values: async () => [
+      { group_id: '20', value: 'u:100,g:10' },
+      { group_id: '30', value: 'u:999' },
+      { group_id: '40', value: 'u:100' }
+    ]
+  });
+  const ctxBothOwned = makeContext(
+    sdkBothOwned,
+    {
+      memberships: {
+        allow_add_existing_groups: true,
+        allow_remove_child_groups: true,
+        allow_create_subgroups: true
+      }
+    },
+    '100'
+  );
+  const addChildRes = await handler(ctxBothOwned, 'add_child_group', {
+    parent_group_id: '20',
+    child_group_id: '40'
+  });
   assert.equal(addChildRes.success, true);
 
   // 3. Creating a new child group under '20' creates group '50' and attaches it

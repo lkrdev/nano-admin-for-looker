@@ -255,6 +255,8 @@ export async function addChildGroupAction(
   if (!childGroupId) {
     throw new Error('child_group_id is required.');
   }
+  assertGroupIsManageable(childGroupId, ownedContext);
+
   if (parentGroupId === childGroupId) {
     throw new Error('400 Bad Request: A group cannot be added as a child of itself.');
   }
@@ -290,6 +292,7 @@ export async function removeChildGroupAction(
   if (!childGroupId) {
     throw new Error('child_group_id is required.');
   }
+  assertGroupIsManageable(childGroupId, ownedContext);
 
   await context.sdk.ok(context.sdk.delete_group_from_group(parentGroupId, childGroupId));
   return {
