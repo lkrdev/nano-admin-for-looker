@@ -11,7 +11,7 @@ const corsHandler = cors({
   origin: true, // Allow all origins for dev, or configure specifically in production
   methods: ['GET', 'POST', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'X-Nano-Admin-Challenge', 'X-Looker-User-ID', 'X-Looker-Instance-Host', 'X-Looker-Host'],
-  credentials: true
+  credentials: false // Auth uses explicit headers (Authorization), never cookies or ambient credentials
 });
 
 import { ApiSettings } from '@looker/sdk-rtl';
