@@ -94,6 +94,9 @@ export async function setUserFolderAccessAction(
     throw new Error(`403 Forbidden: No grantable permission available on folder "${targetFolder.folder_name}".`);
   }
 
+  // Intentional design: delegated user-management admins may update/downgrade any direct
+  // folder grant for an in-scope user on an in-scope folder up to max_grantable_permission
+  // (e.g., 'edit' -> 'view'), as privileged users are already excluded by scope.
   if (targetFolder.direct_access?.access_id) {
     await context.sdk.ok(
       context.sdk.update_content_metadata_access(targetFolder.direct_access.access_id, {
@@ -155,6 +158,9 @@ export async function removeUserFolderAccessAction(
     throw new Error(`User ${targetUserId} does not have a direct access grant on folder "${targetFolder.folder_name}".`);
   }
 
+  // Intentional design: delegated user-management admins may revoke any direct folder grant
+  // (including 'edit') for an in-scope user on an in-scope folder, even if the admin's
+  // Scope Groups only hold 'view' on that folder (privileged users are already excluded by scope).
   await context.sdk.ok(
     context.sdk.delete_content_metadata_access(targetFolder.direct_access.access_id)
   );
