@@ -537,6 +537,54 @@ test('user-management: folder_access does not propagate scope to detached (inher
   assert.equal(createCalls, 0);
 });
 
+test('user-management: schedule actions fail closed on orphaned/system schedules without owner', async () => {
+  let updateCalls = 0;
+  let deleteCalls = 0;
+  const sdk = buildMockLookerSdk({
+    scheduled_plan: async (planId: string) => ({
+      id: planId,
+      name: 'Orphaned System Plan',
+      user_id: null,
+      user: null
+    }),
+    update_scheduled_plan: async () => {
+      updateCalls++;
+      return {};
+    },
+    delete_scheduled_plan: async () => {
+      deleteCalls++;
+      return {};
+    }
+  });
+
+  const ctx = makeContext(sdk, {
+    user_id_limitation: { mode: 'scope_groups_minus_privileged' },
+    telemetry: { allow_manage_schedules: true }
+  }, '100');
+
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'reassign_user_schedule', {
+        user_id: '200',
+        new_owner_user_id: '200',
+        scheduled_plan_id: 'orphaned_plan_123'
+      }),
+    /403 Forbidden: Scheduled plan orphaned_plan_123 does not belong to user 200/
+  );
+
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'delete_user_schedule', {
+        user_id: '200',
+        scheduled_plan_id: 'orphaned_plan_123'
+      }),
+    /403 Forbidden: Scheduled plan orphaned_plan_123 does not belong to user 200/
+  );
+
+  assert.equal(updateCalls, 0);
+  assert.equal(deleteCalls, 0);
+});
+
 test('user-management: default scope_groups_minus_privileged excludes Looker Admins and Service Accounts in Scope Group', async () => {
   const sdk = buildMockLookerSdk({
     all_users: async () => [

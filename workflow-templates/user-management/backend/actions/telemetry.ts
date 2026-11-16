@@ -208,10 +208,10 @@ async function verifyScheduleBelongsToUser(
 ): Promise<void> {
   if (typeof sdk.scheduled_plan === 'function') {
     const plan = await sdk.ok(sdk.scheduled_plan(planId));
-    const ownerId = String(plan?.user_id ?? plan?.user?.id ?? '');
-    if (ownerId && ownerId !== expectedUserId) {
+    const ownerId = String(plan?.user_id ?? plan?.user?.id ?? '').trim();
+    if (!ownerId || ownerId !== expectedUserId) {
       throw new Error(
-        `403 Forbidden: Scheduled plan ${planId} belongs to user ${ownerId}, not ${expectedUserId}.`
+        `403 Forbidden: Scheduled plan ${planId} does not belong to user ${expectedUserId}.`
       );
     }
     return;
