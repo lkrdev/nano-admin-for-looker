@@ -651,6 +651,145 @@ test('user-management: roles prevents cross-role permission+model flattening esc
   assert.equal(setRolesCalls, 0);
 });
 
+test('user-management: user_attributes deletion requires allow_delete and defaults to false on rule objects', async () => {
+  let deleteCalls = 0;
+  const sdk = buildMockLookerSdk({
+    all_user_attributes: async () => [
+      { id: 'attr_scope', name: 'nano_admin_is_workflow_scope_group', is_system: false, value_is_hidden: false },
+      { id: 'ua_plain', name: 'timezone', label: 'Timezone', type: 'string', is_system: false, value_is_hidden: false },
+      { id: 'ua_any_rule', name: 'dept', label: 'Department', type: 'string', is_system: false, value_is_hidden: false },
+      { id: 'ua_restricted', name: 'access_level', label: 'Access Level', type: 'string', is_system: false, value_is_hidden: false },
+      { id: 'ua_opt_in', name: 'region', label: 'Region', type: 'string', is_system: false, value_is_hidden: false }
+    ],
+    delete_user_attribute_user_value: async () => {
+      deleteCalls++;
+      return {};
+    }
+  });
+
+  // 1. Default allow_delete (false) blocks all attribute deletions
+  const ctxNoDelete = makeContext(sdk, {
+    user_attributes: {
+      allow_view: true,
+      allow_edit: true,
+      allowed_attributes: ['timezone', { name: 'region', rule: 'allowed_values', values: ['US'], allow_delete: true }]
+    }
+  }, '100');
+
+  await assert.rejects(
+    async () => await handler(ctxNoDelete, 'delete_user_attribute', { user_id: '200', attribute_id: 'ua_plain' }),
+    /403 Forbidden: Deleting user attribute overrides is not permitted/i
+  );
+  await assert.rejects(
+    async () => await handler(ctxNoDelete, 'delete_user_attribute', { user_id: '200', attribute_id: 'ua_opt_in' }),
+    /403 Forbidden: Deleting user attribute overrides is not permitted/i
+  );
+  assert.equal(deleteCalls, 0);
+
+  // 2. With user_attributes.allow_delete: true, rule objects still default allow_delete to false (even rule: 'any')
+  const ctxWithDelete = makeContext(sdk, {
+    user_attributes: {
+      allow_view: true,
+      allow_edit: true,
+      allow_delete: true,
+      allowed_attributes: [
+        'timezone',
+        { name: 'dept', rule: 'any' },
+        { name: 'access_level', rule: 'allowed_values', values: ['read-only'] },
+        { name: 'region', rule: 'allowed_values', values: ['US'], allow_delete: true }
+      ]
+    }
+  }, '100');
+
+  await assert.rejects(
+    async () => await handler(ctxWithDelete, 'delete_user_attribute', { user_id: '200', attribute_id: 'ua_any_rule' }),
+    /403 Forbidden: Clearing user attribute "dept" is not permitted/i
+  );
+  await assert.rejects(
+    async () => await handler(ctxWithDelete, 'delete_user_attribute', { user_id: '200', attribute_id: 'ua_restricted' }),
+    /403 Forbidden: Clearing user attribute "access_level" is not permitted/i
+  );
+
+  // Plain string entry & explicit allow_delete: true rule succeed
+  await handler(ctxWithDelete, 'delete_user_attribute', { user_id: '200', attribute_id: 'ua_plain' });
+  await handler(ctxWithDelete, 'delete_user_attribute', { user_id: '200', attribute_id: 'ua_opt_in' });
+  assert.equal(deleteCalls, 2);
+});
+
+test('user-management: create_user enforces restricted user_attributes (allowed_values / must_match_scope_group) when omitted or empty', async () => {
+  let createUserCalls = 0;
+  const sdk = buildMockLookerSdk({
+    all_user_attributes: async () => [
+      { id: 'attr_scope', name: 'nano_admin_is_workflow_scope_group', is_system: false, value_is_hidden: false },
+      { id: 'ua_role', name: 'access_level', label: 'Access Level', type: 'string', is_system: false, value_is_hidden: false },
+      { id: 'ua_tenant', name: 'tenant', label: 'Tenant', type: 'string', is_system: false, value_is_hidden: false }
+    ],
+    all_user_attribute_group_values: async (attrId: string) => {
+      if (attrId === 'attr_scope' || attrId === 'attr_100') {
+        return [{ group_id: '10', value: 'yes' }];
+      }
+      if (attrId === 'ua_tenant') {
+        return [{ group_id: '10', value: 'acme' }];
+      }
+      return [];
+    },
+    create_user: async () => {
+      createUserCalls++;
+      return { id: '501' };
+    }
+  });
+
+  const ctx = makeContext(sdk, {
+    profile: { allow_create: true },
+    user_attributes: {
+      allow_edit: true,
+      allowed_attributes: [
+        { name: 'access_level', rule: 'allowed_values', values: ['read-only'] },
+        { name: 'tenant', rule: 'must_match_scope_group' }
+      ]
+    }
+  }, '100');
+
+  // 1. Omitted restricted attribute is rejected before user creation
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'create_user', {
+        first_name: 'New',
+        last_name: 'User',
+        email: 'newuser@example.com',
+        group_ids: ['10'],
+        user_attributes: { tenant: 'acme' }
+      }),
+    /400 Bad Request: User attribute "access_level" is restricted \(allowed_values\) and requires a valid value/i
+  );
+
+  // 2. Empty string for restricted attribute is rejected (403) when "" is not in allowed_values
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'create_user', {
+        first_name: 'New',
+        last_name: 'User',
+        email: 'newuser@example.com',
+        group_ids: ['10'],
+        user_attributes: { access_level: 'read-only', tenant: '' }
+      }),
+    /403 Forbidden: Value "" for user attribute "tenant" must match/i
+  );
+
+  assert.equal(createUserCalls, 0);
+
+  // 3. Valid values for all restricted attributes succeed
+  const res = await handler(ctx, 'create_user', {
+    first_name: 'New',
+    last_name: 'User',
+    email: 'newuser@example.com',
+    group_ids: ['10'],
+    user_attributes: { access_level: 'read-only', tenant: 'acme' }
+  });
+  assert.equal(res.user.id, '501');
+  assert.equal(createUserCalls, 1);
+});
+
 test('user-management: default scope_groups_minus_privileged excludes Looker Admins and Service Accounts in Scope Group', async () => {
   const sdk = buildMockLookerSdk({
     all_users: async () => [

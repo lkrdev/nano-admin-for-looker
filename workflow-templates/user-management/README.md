@@ -23,6 +23,7 @@ The `user-management` workflow template provides a comprehensive, scope-aware de
    - Nano-Admin internal challenge attributes (`nano_admin_challenge`, `nano_admin_admin_extension_nano_admin_challenge`), Scope Group attributes, and Looker `is_system` attributes are always hard-blocked.
    - `blocked_attributes` always takes precedence over `allowed_attributes`.
    - Each allowed attribute can enforce `rule: "any"`, `rule: "allowed_values"` (with `values: [...]`), `rule: "must_match_admin"` (also enforced on user creation), or `rule: "must_match_scope_group"` (must match one of the group values assigned to the admin's active Scope Groups).
+   - Clearing user-level attribute overrides (`delete_user_attribute`) requires `user_attributes.allow_delete: true` (default `false`), and rule-object entries in `allowed_attributes` also default `allow_delete` to `false` unless `allow_delete: true` is explicitly set on the rule.
    - Hidden user attributes (`value_is_hidden: true`) are supported as write-only inputs when allowed.
 6. **Folder Access Capping (`folder_access`)**:
    - Manageable folders are scoped to folders where the admin's active Scope Groups already have access, plus their descendant subfolders.

@@ -39,11 +39,13 @@ export interface AllowedAttributeRule {
   name: string;
   rule: AttributeValueRuleType;
   values?: string[];
+  allow_delete?: boolean;
 }
 
 export interface UserAttributesParameters {
   allow_view: boolean;
   allow_edit: boolean;
+  allow_delete: boolean;
   blocked_attributes: string[];
   allowed_attributes: AllowedAttributeRule[];
   allow_all_non_blocked: boolean;
@@ -166,7 +168,7 @@ export function normalizeParameters(rawParams: Record<string, any> = {}): Normal
       if (trimmed === '*') {
         allowAllNonBlocked = true;
       } else if (trimmed) {
-        parsedAllowedRules.push({ name: trimmed, rule: 'any' });
+        parsedAllowedRules.push({ name: trimmed, rule: 'any', allow_delete: true });
       }
     } else if (entry && typeof entry === 'object' && entry.name) {
       const name = String(entry.name).trim();
@@ -183,7 +185,12 @@ export function normalizeParameters(rawParams: Record<string, any> = {}): Normal
         const values = Array.isArray(entry.values)
           ? entry.values.map((v: any) => String(v))
           : undefined;
-        parsedAllowedRules.push({ name, rule, values });
+        parsedAllowedRules.push({
+          name,
+          rule,
+          values,
+          allow_delete: Boolean(entry.allow_delete)
+        });
       }
     }
   }
@@ -191,6 +198,7 @@ export function normalizeParameters(rawParams: Record<string, any> = {}): Normal
   const user_attributes: UserAttributesParameters = {
     allow_view: rawAttrs.allow_view !== undefined ? Boolean(rawAttrs.allow_view) : true,
     allow_edit: Boolean(rawAttrs.allow_edit),
+    allow_delete: Boolean(rawAttrs.allow_delete),
     blocked_attributes: blockedAttributes,
     allowed_attributes: parsedAllowedRules,
     allow_all_non_blocked: allowAllNonBlocked

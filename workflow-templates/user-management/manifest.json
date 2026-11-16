@@ -121,6 +121,11 @@
           "type": "boolean",
           "default": false
         },
+        "allow_delete": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow deleting/clearing user-level attribute overrides (rule-object entries also require allow_delete: true)"
+        },
         "blocked_attributes": {
           "type": "array",
           "items": {

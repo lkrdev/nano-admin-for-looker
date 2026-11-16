@@ -23,6 +23,7 @@ export interface EvaluatedAttributeMetadata {
   value_is_hidden: boolean;
   is_system: boolean;
   editable: boolean;
+  deletable: boolean;
   rule: AttributeValueRuleType;
   allowed_values: string[] | null;
   current_value: string | null;
@@ -104,8 +105,8 @@ export async function deleteUserAttributeAction(
   scope: ResolvedScopeContext,
   payload: any
 ): Promise<any> {
-  if (!params.user_attributes.allow_edit) {
-    throw new Error('Editing user attributes is not permitted for this workflow.');
+  if (!params.user_attributes.allow_edit || !params.user_attributes.allow_delete) {
+    throw new Error('403 Forbidden: Deleting user attribute overrides is not permitted for this workflow.');
   }
 
   const targetUserId = String(payload?.user_id || '').trim();
@@ -129,8 +130,8 @@ export async function deleteUserAttributeAction(
     throw new Error(`403 Forbidden: User attribute "${targetMeta.name}" is not editable in this workflow.`);
   }
 
-  if (targetMeta.rule === 'must_match_admin') {
-    throw new Error(`403 Forbidden: User attribute "${targetMeta.name}" requires matching the admin's value and cannot be cleared.`);
+  if (!targetMeta.deletable) {
+    throw new Error(`403 Forbidden: Clearing user attribute "${targetMeta.name}" is not permitted in this workflow.`);
   }
 
   await context.sdk.ok(
@@ -167,7 +168,8 @@ export async function resolveCreationRequiredAttributes(
 
     if (attr.rule === 'must_match_admin') {
       const adminVal = attr.allowed_values && attr.allowed_values.length > 0 ? attr.allowed_values[0] : '';
-      const effectiveVal = providedVal !== undefined ? String(providedVal) : adminVal;
+      const effectiveVal =
+        providedVal !== undefined && String(providedVal) !== '' ? String(providedVal) : adminVal;
       validateAttributeValueAgainstRule(attr, effectiveVal);
       if (effectiveVal !== '') {
         toApply.push({
@@ -176,6 +178,19 @@ export async function resolveCreationRequiredAttributes(
           value: effectiveVal
         });
       }
+    } else if (attr.rule === 'allowed_values' || attr.rule === 'must_match_scope_group') {
+      if (providedVal === undefined) {
+        throw new Error(
+          `400 Bad Request: User attribute "${attr.name}" is restricted (${attr.rule}) and requires a valid value upon user creation.`
+        );
+      }
+      const strVal = String(providedVal);
+      validateAttributeValueAgainstRule(attr, strVal);
+      toApply.push({
+        attribute_id: attr.id,
+        attribute_name: attr.name,
+        value: strVal
+      });
     } else if (providedVal !== undefined && String(providedVal) !== '') {
       const strVal = String(providedVal);
       validateAttributeValueAgainstRule(attr, strVal);
@@ -265,6 +280,11 @@ export async function buildEvaluatedUserAttributes(
       !isExplicitlyBlocked &&
       (Boolean(matchedRule) || params.user_attributes.allow_all_non_blocked);
 
+    const isAllowedForDelete =
+      isAllowedForEdit &&
+      params.user_attributes.allow_delete &&
+      (matchedRule ? matchedRule.allow_delete === true : params.user_attributes.allow_all_non_blocked);
+
     const ruleType: AttributeValueRuleType = matchedRule?.rule || 'any';
     let allowedValues: string[] | null = null;
 
@@ -296,6 +316,7 @@ export async function buildEvaluatedUserAttributes(
       value_is_hidden: isHidden,
       is_system: isSystem,
       editable: isAllowedForEdit,
+      deletable: isAllowedForDelete,
       rule: ruleType,
       allowed_values: allowedValues,
       current_value: isHidden ? null : (userValObj?.value ?? attr.default_value ?? null),

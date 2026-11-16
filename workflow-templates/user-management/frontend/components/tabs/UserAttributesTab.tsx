@@ -149,7 +149,7 @@ export const UserAttributesTab: React.FC<UserAttributesTabProps> = ({
                           >
                             Save
                           </button>
-                          {attr.has_user_override && attr.rule !== 'must_match_admin' && (
+                          {attr.has_user_override && attr.deletable && (
                             <button
                               onClick={() => handleDeleteAttributeOverride(attr.id)}
                               disabled={actionLoading}
