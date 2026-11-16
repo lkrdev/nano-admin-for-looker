@@ -19,17 +19,20 @@ export interface AuthenticationResult {
 }
 
 export function isHostAllowed(host: string, allowedInstancesEnv?: string): boolean {
+  if (!host || !host.trim()) {
+    return false;
+  }
   if (!allowedInstancesEnv || !allowedInstancesEnv.trim()) {
-    return true; // No allowlist configured, permissive mode
+    return false;
   }
   const allowedList = allowedInstancesEnv
     .split(',')
     .map((h) => h.trim().toLowerCase())
     .filter(Boolean);
   if (allowedList.length === 0) {
-    return true;
+    return false;
   }
-  return allowedList.includes((host || '').trim().toLowerCase());
+  return allowedList.includes(host.trim().toLowerCase());
 }
 
 function sanitizeHost(rawHost: string): string {

@@ -122,10 +122,11 @@ test('isUserAuthorized — enforces default-deny and multi-instance authorizatio
 });
 
 test('isHostAllowed — enforces LOOKER_ALLOWED_INSTANCES allowlist', () => {
-  // 1. Permissive when env var is not set or empty
-  assert.equal(isHostAllowed('any.host.com', undefined), true);
-  assert.equal(isHostAllowed('any.host.com', ''), true);
-  assert.equal(isHostAllowed('any.host.com', '   '), true);
+  // 1. Fail-closed (default-deny) when env var is not set, empty, or whitespace
+  assert.equal(isHostAllowed('any.host.com', undefined), false);
+  assert.equal(isHostAllowed('any.host.com', ''), false);
+  assert.equal(isHostAllowed('any.host.com', '   '), false);
+  assert.equal(isHostAllowed('', 'dev.looker.app'), false);
 
   // 2. Strict when env var is configured
   const allowlist = 'dev.looker.app, prod.looker.app, custom.looker.app:8443';
