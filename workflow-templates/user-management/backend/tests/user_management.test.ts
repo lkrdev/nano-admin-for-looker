@@ -491,6 +491,52 @@ test('user-management: folder_access scopes folders to Scope Group grants + desc
   assert.equal(okRes.success, true);
 });
 
+test('user-management: folder_access does not propagate scope to detached (inherits: false) subfolders', async () => {
+  let createCalls = 0;
+  const sdk = buildMockLookerSdk({
+    all_folders: async () => [
+      { id: 'f_mkt', name: 'Marketing Root', parent_id: null, content_metadata_id: 'cm_mkt' },
+      { id: 'f_private', name: 'HR Private', parent_id: 'f_mkt', content_metadata_id: 'cm_private' },
+      { id: 'f_private_sub', name: 'HR Private Child', parent_id: 'f_private', content_metadata_id: 'cm_private_sub' }
+    ],
+    all_content_metadata_accesses: async (arg: any) => {
+      const cmId = typeof arg === 'string' ? arg : String(arg?.content_metadata_id || '');
+      if (cmId === 'cm_mkt') {
+        return [{ id: 'acc_1', content_metadata_id: 'cm_mkt', group_id: '10', permission_type: 'edit' }];
+      }
+      return [];
+    },
+    content_metadata: async (cmId: string) => {
+      if (cmId === 'cm_private_sub') return { id: 'cm_private_sub', inherits: true };
+      return { id: cmId, inherits: false };
+    },
+    create_content_metadata_access: async () => {
+      createCalls++;
+      return { id: 'acc_new' };
+    }
+  });
+
+  const ctx = makeContext(sdk, { folder_access: { allow_view: true, allow_edit: true } }, '100');
+
+  const listRes = await handler(ctx, 'get_user_folder_access', { user_id: '200' });
+  assert.deepEqual(
+    listRes.folders.map((f: any) => f.folder_id),
+    ['f_mkt']
+  );
+
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'set_user_folder_access', {
+        user_id: '200',
+        folder_id: 'f_private',
+        permission_type: 'edit'
+      }),
+    /403 Forbidden/i
+  );
+
+  assert.equal(createCalls, 0);
+});
+
 test('user-management: default scope_groups_minus_privileged excludes Looker Admins and Service Accounts in Scope Group', async () => {
   const sdk = buildMockLookerSdk({
     all_users: async () => [

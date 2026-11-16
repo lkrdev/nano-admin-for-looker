@@ -274,14 +274,14 @@ export async function evaluateScopedFoldersForUser(
 
       for (const childId of children) {
         const childMeta = metaByFolderId.get(childId);
-        const directChildPerm = childMeta
-          ? computeHighestScopeGroupPermission(childMeta.accesses, scope.manageableGroupIdsSet)
-          : null;
+        if (!childMeta?.inherits) {
+          // Detached subfolder (Custom Access): never inherits parent scope.
+          // Any direct Scope Group grants on childId (and its subtree) are already seeded in queue.
+          continue;
+        }
 
-        // If child inherits or doesn't explicitly restrict, inherit parent's scope permission cap
-        const effectiveCap = directChildPerm || parentPerm;
         const existingCap = scopedPermissionByFolderId.get(childId);
-        const mergedCap = mergeHigherPermission(existingCap || null, effectiveCap);
+        const mergedCap = mergeHigherPermission(existingCap || null, parentPerm);
         if (mergedCap) {
           scopedPermissionByFolderId.set(childId, mergedCap);
         }
