@@ -585,6 +585,72 @@ test('user-management: schedule actions fail closed on orphaned/system schedules
   assert.equal(deleteCalls, 0);
 });
 
+test('user-management: roles prevents cross-role permission+model flattening escalation', async () => {
+  let setRolesCalls = 0;
+  const sdk = buildMockLookerSdk({
+    all_users: async () => [
+      {
+        id: '100',
+        first_name: 'Alice',
+        last_name: 'Admin',
+        display_name: 'Alice Admin',
+        email: 'alice@example.com',
+        is_disabled: false,
+        is_service_account: false,
+        group_ids: ['10'],
+        role_ids: ['r_dev_sandbox', 'r_explore_prod']
+      },
+      {
+        id: '200',
+        first_name: 'Bob',
+        last_name: 'User',
+        display_name: 'Bob User',
+        email: 'bob@example.com',
+        is_disabled: false,
+        is_service_account: false,
+        group_ids: ['10'],
+        role_ids: []
+      }
+    ],
+    all_roles: async () => [
+      {
+        id: 'r_dev_sandbox',
+        name: 'Dev Sandbox',
+        permission_set: { permissions: ['develop'] },
+        model_set: { models: ['sandbox_model'], all_access: false }
+      },
+      {
+        id: 'r_explore_prod',
+        name: 'Explore Prod',
+        permission_set: { permissions: ['explore'] },
+        model_set: { models: ['production_model'], all_access: false }
+      },
+      {
+        id: 'r_dev_prod',
+        name: 'Dev Prod',
+        permission_set: { permissions: ['develop'] },
+        model_set: { models: ['production_model'], all_access: false }
+      }
+    ],
+    set_user_roles: async () => {
+      setRolesCalls++;
+      return [];
+    }
+  });
+
+  const ctx = makeContext(sdk, { roles: { allow_view: true, allow_edit: true } }, '100');
+  const getRes = await handler(ctx, 'get_user_roles', { user_id: '200' });
+  const devProdRole = getRes.roles.find((r: any) => r.id === 'r_dev_prod');
+  assert.equal(devProdRole.assignable, false);
+
+  await assert.rejects(
+    async () => await handler(ctx, 'set_user_roles', { user_id: '200', role_ids: ['r_dev_prod'] }),
+    /403 Forbidden/i
+  );
+
+  assert.equal(setRolesCalls, 0);
+});
+
 test('user-management: default scope_groups_minus_privileged excludes Looker Admins and Service Accounts in Scope Group', async () => {
   const sdk = buildMockLookerSdk({
     all_users: async () => [

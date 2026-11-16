@@ -184,67 +184,82 @@ export function isRoleAdmin(role: any): boolean {
   return perms.includes('administer');
 }
 
+interface AdminCapabilities {
+  hasAllPermissionsAndModels: boolean;
+  allModelPermissions: Set<string>;
+  modelsByPermission: Map<string, Set<string>>;
+}
+
 function computeEffectiveCapabilities(
   allRoles: any[],
   effectiveRoleIds: Set<string>
-): {
-  hasAllPermissions: boolean;
-  hasAllModels: boolean;
-  permissions: Set<string>;
-  models: Set<string>;
-} {
-  let hasAllPermissions = false;
-  let hasAllModels = false;
-  const permissions = new Set<string>();
-  const models = new Set<string>();
+): AdminCapabilities {
+  let hasAllPermissionsAndModels = false;
+  const allModelPermissions = new Set<string>();
+  const modelsByPermission = new Map<string, Set<string>>();
 
   for (const role of allRoles) {
     if (!effectiveRoleIds.has(String(role.id))) continue;
 
     if (isRoleAdmin(role)) {
-      hasAllPermissions = true;
-      hasAllModels = true;
+      hasAllPermissionsAndModels = true;
+      continue;
     }
-    if (role.model_set?.all_access === true || role.model_set?.unlimited === true) {
-      hasAllModels = true;
-    }
-    for (const p of role.permission_set?.permissions || []) {
-      permissions.add(String(p));
-    }
-    for (const m of role.model_set?.models || []) {
-      models.add(String(m));
+
+    const rolePerms: string[] = Array.isArray(role.permission_set?.permissions)
+      ? role.permission_set.permissions.map((p: any) => String(p))
+      : [];
+    const roleModelAllAccess = Boolean(role.model_set?.all_access || role.model_set?.unlimited);
+    const roleModels: string[] = Array.isArray(role.model_set?.models)
+      ? role.model_set.models.map((m: any) => String(m))
+      : [];
+
+    for (const perm of rolePerms) {
+      if (roleModelAllAccess) {
+        allModelPermissions.add(perm);
+        continue;
+      }
+
+      let allowedModels = modelsByPermission.get(perm);
+      if (!allowedModels) {
+        allowedModels = new Set<string>();
+        modelsByPermission.set(perm, allowedModels);
+      }
+      for (const model of roleModels) {
+        allowedModels.add(model);
+      }
     }
   }
 
-  return { hasAllPermissions, hasAllModels, permissions, models };
+  return { hasAllPermissionsAndModels, allModelPermissions, modelsByPermission };
 }
 
 function isRoleSubsetOfAdmin(
   rolePermissions: string[],
   roleModels: string[],
   roleModelAllAccess: boolean,
-  adminCaps: {
-    hasAllPermissions: boolean;
-    hasAllModels: boolean;
-    permissions: Set<string>;
-    models: Set<string>;
-  }
+  adminCaps: AdminCapabilities
 ): boolean {
-  if (!adminCaps.hasAllPermissions) {
-    for (const p of rolePermissions) {
-      if (!adminCaps.permissions.has(p)) {
-        return false;
-      }
+  if (adminCaps.hasAllPermissionsAndModels) {
+    return true;
+  }
+
+  for (const perm of rolePermissions) {
+    if (adminCaps.allModelPermissions.has(perm)) {
+      continue;
     }
-  }
 
-  if (roleModelAllAccess && !adminCaps.hasAllModels) {
-    return false;
-  }
+    if (roleModelAllAccess) {
+      return false;
+    }
 
-  if (!adminCaps.hasAllModels) {
-    for (const m of roleModels) {
-      if (!adminCaps.models.has(m)) {
+    const adminModelsForPerm = adminCaps.modelsByPermission.get(perm);
+    if (!adminModelsForPerm) {
+      return false;
+    }
+
+    for (const model of roleModels) {
+      if (!adminModelsForPerm.has(model)) {
         return false;
       }
     }
