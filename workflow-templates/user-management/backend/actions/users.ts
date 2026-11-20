@@ -116,6 +116,25 @@ export async function createUserAction(
     }
   }
 
+  // Enforce groups.allow_edit: when disabled, only allow assigning the invoking admin's active Scope Groups
+  // (required for scope_groups* visibility) and forbid all other group assignments.
+  if (!params.groups.allow_edit) {
+    if (isScopeGroupsLimitationMode(scope.limitation.mode)) {
+      const activeScopeSet = new Set(scope.adminActiveScopeGroupIds);
+      for (const gid of requestedGroupIds) {
+        if (!activeScopeSet.has(gid)) {
+          throw new Error(
+            `403 Forbidden: Assigning group "${gid}" is not permitted when groups.allow_edit is disabled.`
+          );
+        }
+      }
+    } else if (requestedGroupIds.length > 0) {
+      throw new Error(
+        '403 Forbidden: Assigning groups upon user creation is not permitted when groups.allow_edit is disabled.'
+      );
+    }
+  }
+
   // Ensure all requested groups are within manageable group hierarchy
   for (const gid of requestedGroupIds) {
     if (!scope.manageableGroupIdsSet.has(gid)) {

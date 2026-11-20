@@ -272,6 +272,84 @@ test('user-management: create_user pre-checks duplicates, enforces Scope Group a
   assert.match(partialRes.warnings[0], /Simulated email credential creation failure/);
 });
 
+test('user-management: create_user enforces groups.allow_edit in both scope_groups and non-scope_groups modes', async () => {
+  const addedGroups: string[] = [];
+  const sdk = buildMockLookerSdk({
+    create_user: async (body: any) => ({
+      id: '501',
+      first_name: body.first_name,
+      last_name: body.last_name,
+      is_disabled: body.is_disabled
+    }),
+    add_group_user: async (gid: string) => {
+      addedGroups.push(String(gid));
+      return {};
+    }
+  });
+
+  // 1. In scope_groups_minus_privileged mode with groups.allow_edit: false,
+  //    active Scope Group '10' is allowed, but child subgroup '11' is rejected with 403.
+  const scopeCtx = makeContext(
+    sdk,
+    {
+      profile: { allow_create: true },
+      groups: { allow_view: true, allow_edit: false }
+    },
+    '100'
+  );
+
+  await assert.rejects(
+    async () =>
+      await handler(scopeCtx, 'create_user', {
+        first_name: 'Sub',
+        last_name: 'Escalator',
+        email: 'sub@example.com',
+        group_ids: ['10', '11']
+      }),
+    /403 Forbidden: Assigning group "11" is not permitted when groups\.allow_edit is disabled/i
+  );
+
+  const scopeCreateRes = await handler(scopeCtx, 'create_user', {
+    first_name: 'Scoped',
+    last_name: 'User',
+    email: 'scoped@example.com',
+    group_ids: ['10']
+  });
+  assert.equal(scopeCreateRes.user.id, '501');
+  assert.deepEqual(addedGroups, ['10']);
+
+  // 2. In exclude_privileged mode with groups.allow_edit: false,
+  //    any non-empty group_ids is rejected with 403, while empty group_ids succeeds.
+  const nonScopeCtx = makeContext(
+    sdk,
+    {
+      user_id_limitation: { mode: 'exclude_privileged' },
+      profile: { allow_create: true },
+      groups: { allow_view: true, allow_edit: false }
+    },
+    '100'
+  );
+
+  await assert.rejects(
+    async () =>
+      await handler(nonScopeCtx, 'create_user', {
+        first_name: 'Admin',
+        last_name: 'Escalator',
+        email: 'adminesc@example.com',
+        group_ids: ['10']
+      }),
+    /403 Forbidden: Assigning groups upon user creation is not permitted when groups\.allow_edit is disabled/i
+  );
+
+  const nonScopeCreateRes = await handler(nonScopeCtx, 'create_user', {
+    first_name: 'Plain',
+    last_name: 'User',
+    email: 'plain@example.com',
+    group_ids: []
+  });
+  assert.equal(nonScopeCreateRes.user.id, '501');
+});
+
 test('user-management: groups allows multi-hop subgroups, blocks external groups, and warns when removing from final Scope Group', async () => {
   const sdk = buildMockLookerSdk({
     add_group_user: async () => ({}),
