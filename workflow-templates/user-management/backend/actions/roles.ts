@@ -1,3 +1,4 @@
+import { isRoleAdmin } from '../../../../auth_utils';
 import {
   NormalizedUserManagementParameters,
   ResolvedScopeContext,
@@ -174,23 +175,15 @@ export async function evaluateRolesForTargetUser(
   return evaluated;
 }
 
-export function isRoleAdmin(role: any): boolean {
-  if (!role) return false;
-  if (String(role.name || '').trim().toLowerCase() === 'admin') return true;
-  if (role.permission_set?.all_access === true || role.permission_set?.unlimited === true) return true;
-  const perms: string[] = Array.isArray(role.permission_set?.permissions)
-    ? role.permission_set.permissions
-    : [];
-  return perms.includes('administer');
-}
+export { isRoleAdmin };
 
-interface AdminCapabilities {
+export interface AdminCapabilities {
   hasAllPermissionsAndModels: boolean;
   allModelPermissions: Set<string>;
   modelsByPermission: Map<string, Set<string>>;
 }
 
-function computeEffectiveCapabilities(
+export function computeEffectiveCapabilities(
   allRoles: any[],
   effectiveRoleIds: Set<string>
 ): AdminCapabilities {
@@ -234,7 +227,7 @@ function computeEffectiveCapabilities(
   return { hasAllPermissionsAndModels, allModelPermissions, modelsByPermission };
 }
 
-function isRoleSubsetOfAdmin(
+export function isRoleSubsetOfAdmin(
   rolePermissions: string[],
   roleModels: string[],
   roleModelAllAccess: boolean,
@@ -268,7 +261,7 @@ function isRoleSubsetOfAdmin(
   return true;
 }
 
-async function resolveEffectiveRoleIdsForUser(
+export async function resolveEffectiveRoleIdsForUser(
   sdk: any,
   userId: string,
   userObj: any,
@@ -299,7 +292,7 @@ async function resolveEffectiveRoleIdsForUser(
   return effectiveIds;
 }
 
-async function fetchGroupRolesMap(
+export async function fetchGroupRolesMap(
   sdk: any,
   allRoles: any[]
 ): Promise<{

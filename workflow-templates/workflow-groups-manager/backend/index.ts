@@ -10,6 +10,7 @@ import {
   inspectGroupHierarchyForScopeGroups,
   inspectGroupOwnersScopeOverlapWarnings,
   inspectPrivilegedScopeGroupMembers,
+  inspectRoleBearingSubgroups,
   inspectUnfilteredUserManagementModeWarnings
 } from './audit_warnings';
 
@@ -337,7 +338,7 @@ async function executeGroupsAudit(
   const monitoredOwnershipAttrNames = Array.from(ownershipAttributeNamesSet);
 
   // 3. Fetch Looker instance state
-  const [allAttributes, allGroups, allUsers] = await Promise.all([
+  const [allAttributes, allGroups, allUsers, allRoles] = await Promise.all([
     sdk.ok(sdk.all_user_attributes({})),
     sdk.ok(sdk.all_groups({ fields: 'id,name' })),
     sdk.ok(
@@ -345,7 +346,10 @@ async function executeGroupsAudit(
         fields: 'id,first_name,last_name,email,display_name,is_disabled,is_service_account,role_ids',
         limit: 1000
       })
-    )
+    ),
+    typeof sdk.all_roles === 'function'
+      ? sdk.ok(sdk.all_roles({})).catch(() => [])
+      : Promise.resolve([])
   ]);
 
   const groupsMap = new Map<string, any>();
@@ -685,11 +689,12 @@ async function executeGroupsAudit(
     }
   }
 
-  const { hierarchyByGroupId, deepSubgroupWarnings } = await inspectGroupHierarchyForScopeGroups(
-    sdk,
-    activeScopeGroupsFlat,
-    groupsMap
-  );
+  const { hierarchyByGroupId, deepSubgroupWarnings, groupRoleIdsMap } =
+    await inspectGroupHierarchyForScopeGroups(
+      sdk,
+      activeScopeGroupsFlat,
+      groupsMap
+    );
 
   for (const attrAudit of scopeAttributeAudits) {
     for (const tg of attrAudit.tagged_groups || []) {
@@ -715,6 +720,12 @@ async function executeGroupsAudit(
   );
 
   const unfilteredModeWarnings = inspectUnfilteredUserManagementModeWarnings(workflows);
+  const roleBearingSubgroupWarnings = inspectRoleBearingSubgroups(
+    activeScopeGroupsFlat,
+    hierarchyByGroupId,
+    allRoles || [],
+    groupRoleIdsMap
+  );
 
   // 7. Evaluate Scope Group Health Checks Matrix
   const missingAttributes = scopeAttributeAudits
@@ -832,6 +843,17 @@ async function executeGroupsAudit(
           : `${unfilteredModeWarnings.length} user-management workflow(s) (${unfilteredModeWarnings.map((w) => `${w.workflow_label} [${w.configured_mode}]`).join(', ')}) do not exclude privileged accounts.`,
       recommendation:
         'Set user_id_limitation.mode to "scope_groups_minus_privileged" (or omit mode to use the default) on user-management workflows in index.md.'
+    },
+    {
+      id: 'no_role_bearing_subgroups',
+      title: 'Scope Group Subgroups Do Not Carry Elevated Roles',
+      passed: roleBearingSubgroupWarnings.length === 0,
+      description:
+        roleBearingSubgroupWarnings.length === 0
+          ? 'No Scope Group descendant subgroups carry Looker roles that could trigger privilege escalation or blocked group assignments.'
+          : `${roleBearingSubgroupWarnings.length} Scope Group subgroup(s) (${roleBearingSubgroupWarnings.map((w) => `${w.subgroup_name} -> [${w.roles.map((r) => r.name).join(', ')}]`).join('; ')}) carry Looker roles.`,
+      recommendation:
+        'Avoid placing role-bearing subgroups (especially Admin-role subgroups) under Scope Groups, or ensure delegated admins only assign subgroups whose roles are within their own capabilities.'
     }
   ];
 
@@ -845,6 +867,7 @@ async function executeGroupsAudit(
     scope_attributes: scopeAttributeAudits,
     user_misconfigurations: userMisconfigurations,
     deep_subgroup_warnings: deepSubgroupWarnings,
+    role_bearing_subgroup_warnings: roleBearingSubgroupWarnings,
     privileged_scope_members: privilegedScopeMembers,
     lateral_escalation_warnings: lateralEscalationWarnings,
     unfiltered_mode_warnings: unfilteredModeWarnings,

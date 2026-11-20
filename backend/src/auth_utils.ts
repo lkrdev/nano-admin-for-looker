@@ -361,6 +361,20 @@ export async function resolveUserIdLimitation(
   throw new Error(`Unsupported user_id_limitation mode: "${String(mode)}"`);
 }
 
+/**
+ * Returns true if a Looker role grants administrative privileges (named "Admin",
+ * has all_access / unlimited permissions, or includes the "administer" permission).
+ */
+export function isRoleAdmin(role: any): boolean {
+  if (!role) return false;
+  if (String(role.name || '').trim().toLowerCase() === 'admin') return true;
+  if (role.permission_set?.all_access === true || role.permission_set?.unlimited === true) return true;
+  const perms: string[] = Array.isArray(role.permission_set?.permissions)
+    ? role.permission_set.permissions
+    : [];
+  return perms.includes('administer');
+}
+
 
 
 function fetchRawText(urlStr: string, headers: any): Promise<string> {

@@ -135,8 +135,14 @@ export async function createUserAction(
     }
   }
 
-  // Ensure all requested groups are within manageable group hierarchy
+  // Ensure all requested groups are within manageable group hierarchy and do not escalate privileges
   for (const gid of requestedGroupIds) {
+    const blockedReason = scope.blockedGroupReasons?.get(gid);
+    if (blockedReason) {
+      throw new Error(
+        `403 Forbidden: Group "${gid}" cannot be assigned because it ${blockedReason}.`
+      );
+    }
     if (!scope.manageableGroupIdsSet.has(gid)) {
       throw new Error(`403 Forbidden: Group "${gid}" is outside the admin's manageable Scope Group hierarchy.`);
     }

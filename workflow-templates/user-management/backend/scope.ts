@@ -3,6 +3,14 @@ import {
   UserIdLimitationMode
 } from '../../../auth_utils';
 import {
+  AdminCapabilities,
+  computeEffectiveCapabilities,
+  fetchGroupRolesMap,
+  isRoleAdmin,
+  isRoleSubsetOfAdmin,
+  resolveEffectiveRoleIdsForUser
+} from './actions/roles';
+import {
   ManageableGroupNode,
   NormalizedUserManagementParameters,
   ResolvedScopeContext,
@@ -24,10 +32,12 @@ export async function resolveScopeContext(
     attributeName
   );
 
-  const manageableGroups = await resolveManageableGroupHierarchy(
+  const { manageableGroups, blockedGroupReasons } = await resolveManageableGroupHierarchy(
     sdk,
     adminActiveScopeGroupIds,
-    params.user_id_limitation.mode
+    params.user_id_limitation.mode,
+    context.userId,
+    params
   );
 
   const manageableGroupIdsSet = new Set<string>(manageableGroups.map((g) => g.id));
@@ -37,7 +47,8 @@ export async function resolveScopeContext(
     attributeName,
     adminActiveScopeGroupIds,
     manageableGroups,
-    manageableGroupIdsSet
+    manageableGroupIdsSet,
+    blockedGroupReasons
   };
 }
 
@@ -113,8 +124,15 @@ export async function resolveAdminActiveScopeGroupIds(
 export async function resolveManageableGroupHierarchy(
   sdk: any,
   adminActiveScopeGroupIds: string[],
-  mode: UserIdLimitationMode
-): Promise<ManageableGroupNode[]> {
+  mode: UserIdLimitationMode,
+  adminUserId?: string,
+  params?: NormalizedUserManagementParameters
+): Promise<{ manageableGroups: ManageableGroupNode[]; blockedGroupReasons: Map<string, string> }> {
+  // In 'self' mode, users can only manage themselves and must not manage Scope Groups or subgroups.
+  if (mode === 'self') {
+    return { manageableGroups: [], blockedGroupReasons: new Map<string, string>() };
+  }
+
   let allGroups: any[] = [];
   try {
     if (typeof sdk.all_groups === 'function') {
@@ -144,13 +162,13 @@ export async function resolveManageableGroupHierarchy(
     }
   }
 
-  // If mode is 'none' or 'exclude_privileged', all groups are manageable
+  // If mode is 'none' or 'exclude_privileged', start with all groups then filter out role-escalating groups
   if (mode === 'none' || mode === 'exclude_privileged') {
     const allIds = new Set<string>([
       ...Array.from(groupNameMap.keys()),
       ...adminActiveScopeGroupIds
     ]);
-    return Array.from(allIds).map((id) => {
+    const candidates = Array.from(allIds).map((id) => {
       const hItem = (hierarchyItems || []).find((h: any) => String(h.id) === id);
       return {
         id,
@@ -165,10 +183,11 @@ export async function resolveManageableGroupHierarchy(
           : []
       };
     });
+    return await filterGroupsByAdminCapabilities(sdk, candidates, hierarchyItems, adminUserId, params);
   }
 
   if (adminActiveScopeGroupIds.length === 0) {
-    return [];
+    return { manageableGroups: [], blockedGroupReasons: new Map<string, string>() };
   }
 
   // Build parent -> child adjacency list from search_groups_with_hierarchy
@@ -237,5 +256,182 @@ export async function resolveManageableGroupHierarchy(
     }
   }
 
-  return Array.from(visited.values());
+  return await filterGroupsByAdminCapabilities(
+    sdk,
+    Array.from(visited.values()),
+    hierarchyItems,
+    adminUserId,
+    params
+  );
+}
+
+async function filterGroupsByAdminCapabilities(
+  sdk: any,
+  candidateGroups: ManageableGroupNode[],
+  hierarchyItems: any[],
+  adminUserId?: string,
+  params?: NormalizedUserManagementParameters
+): Promise<{ manageableGroups: ManageableGroupNode[]; blockedGroupReasons: Map<string, string> }> {
+  const blockedGroupReasons = new Map<string, string>();
+  if (candidateGroups.length === 0) {
+    return { manageableGroups: [], blockedGroupReasons };
+  }
+
+  let allRoles: any[] = [];
+  if (typeof sdk.all_roles === 'function') {
+    try {
+      allRoles = await sdk.ok(sdk.all_roles({}));
+    } catch {
+      allRoles = [];
+    }
+  }
+
+  const rolesById = new Map<string, any>();
+  for (const r of allRoles || []) {
+    if (r?.id !== undefined && r?.id !== null) {
+      rolesById.set(String(r.id), r);
+    }
+  }
+
+  const groupRolesInfo = await fetchGroupRolesMap(sdk, allRoles || []);
+  const roleIdsByGroupId = new Map<string, Set<string>>();
+  for (const [gid, rids] of groupRolesInfo.roleIdsByGroupId.entries()) {
+    roleIdsByGroupId.set(gid, new Set(rids));
+  }
+
+  const parentGroupIdsById = new Map<string, string[]>();
+  for (const item of hierarchyItems || []) {
+    const gid = String(item.id);
+    if (Array.isArray(item.parent_group_ids)) {
+      parentGroupIdsById.set(gid, item.parent_group_ids.map((p: any) => String(p)));
+    }
+    if (Array.isArray(item.role_ids) && item.role_ids.length > 0) {
+      const set = roleIdsByGroupId.get(gid) || new Set<string>();
+      item.role_ids.forEach((r: any) => set.add(String(r)));
+      roleIdsByGroupId.set(gid, set);
+    }
+  }
+  for (const g of candidateGroups) {
+    if (!parentGroupIdsById.has(g.id) && g.parent_group_ids.length > 0) {
+      parentGroupIdsById.set(g.id, g.parent_group_ids);
+    }
+    if (g.role_ids.length > 0) {
+      const set = roleIdsByGroupId.get(g.id) || new Set<string>();
+      g.role_ids.forEach((r) => set.add(String(r)));
+      roleIdsByGroupId.set(g.id, set);
+    }
+  }
+
+  let adminCapabilities: AdminCapabilities | null = null;
+  if (allRoles.length > 0 && adminUserId && typeof sdk.user === 'function') {
+    try {
+      const adminUser = await sdk.ok(sdk.user(adminUserId, 'id,role_ids,group_ids'));
+      const flatRoleIdsMap = new Map<string, string[]>();
+      for (const [gid, rset] of roleIdsByGroupId.entries()) {
+        flatRoleIdsMap.set(gid, Array.from(rset));
+      }
+      const adminEffectiveRoleIds = await resolveEffectiveRoleIdsForUser(
+        sdk,
+        adminUserId,
+        adminUser,
+        flatRoleIdsMap
+      );
+      adminCapabilities = computeEffectiveCapabilities(allRoles, adminEffectiveRoleIds);
+    } catch {
+      adminCapabilities = null;
+    }
+  }
+
+  const allowedRoleSet = new Set<string>(params?.roles?.allowed_role_ids || []);
+  const manageableGroups: ManageableGroupNode[] = [];
+
+  for (const group of candidateGroups) {
+    const transitiveRoleIds = collectTransitiveGroupRoleIds(
+      group.id,
+      roleIdsByGroupId,
+      parentGroupIdsById
+    );
+
+    if (transitiveRoleIds.length === 0) {
+      manageableGroups.push(group);
+      continue;
+    }
+
+    const blockReason = evaluateGroupRolesEscalation(
+      transitiveRoleIds,
+      rolesById,
+      adminCapabilities,
+      allowedRoleSet
+    );
+    if (blockReason) {
+      blockedGroupReasons.set(group.id, blockReason);
+    } else {
+      manageableGroups.push(group);
+    }
+  }
+
+  return { manageableGroups, blockedGroupReasons };
+}
+
+function collectTransitiveGroupRoleIds(
+  groupId: string,
+  roleIdsByGroupId: Map<string, Set<string>>,
+  parentGroupIdsById: Map<string, string[]>
+): string[] {
+  const collectedRoles = new Set<string>();
+  const visitedGroups = new Set<string>([groupId]);
+  const queue: string[] = [groupId];
+
+  while (queue.length > 0) {
+    const currentId = queue.shift()!;
+    const directRoles = roleIdsByGroupId.get(currentId);
+    if (directRoles) {
+      directRoles.forEach((rid) => collectedRoles.add(rid));
+    }
+    const parents = parentGroupIdsById.get(currentId) || [];
+    for (const pid of parents) {
+      if (!visitedGroups.has(pid)) {
+        visitedGroups.add(pid);
+        queue.push(pid);
+      }
+    }
+  }
+
+  return Array.from(collectedRoles);
+}
+
+function evaluateGroupRolesEscalation(
+  transitiveRoleIds: string[],
+  rolesById: Map<string, any>,
+  adminCapabilities: AdminCapabilities | null,
+  allowedRoleSet: Set<string>
+): string | null {
+  if (rolesById.size === 0 || !adminCapabilities) {
+    return 'grants Looker roles that could not be verified against your permissions';
+  }
+
+  for (const roleId of transitiveRoleIds) {
+    const role = rolesById.get(roleId);
+    if (!role) {
+      return `grants unrecognized Looker role "${roleId}"`;
+    }
+    if (isRoleAdmin(role)) {
+      return `grants a Looker Admin role ("${role.name || roleId}")`;
+    }
+    if (allowedRoleSet.size > 0 && !allowedRoleSet.has(roleId)) {
+      return `grants role "${role.name || roleId}" outside the workflow's allowed_role_ids`;
+    }
+    const permissions: string[] = Array.isArray(role.permission_set?.permissions)
+      ? role.permission_set.permissions.map((p: any) => String(p))
+      : [];
+    const models: string[] = Array.isArray(role.model_set?.models)
+      ? role.model_set.models.map((m: any) => String(m))
+      : [];
+    const modelAllAccess = Boolean(role.model_set?.all_access || role.model_set?.unlimited);
+    if (!isRoleSubsetOfAdmin(permissions, models, modelAllAccess, adminCapabilities)) {
+      return `grants Looker role "${role.name || roleId}" exceeding your permissions or model access`;
+    }
+  }
+
+  return null;
 }

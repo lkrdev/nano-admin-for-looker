@@ -105,6 +105,7 @@ export interface ResolvedScopeContext {
   adminActiveScopeGroupIds: string[];
   manageableGroups: ManageableGroupNode[];
   manageableGroupIdsSet: Set<string>;
+  blockedGroupReasons?: Map<string, string>;
 }
 
 export function normalizeParameters(rawParams: Record<string, any> = {}): NormalizedUserManagementParameters {

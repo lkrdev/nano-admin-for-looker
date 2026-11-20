@@ -11,6 +11,7 @@ import {
   inspectGroupHierarchyForScopeGroups,
   inspectPrivilegedScopeGroupMembers,
   inspectGroupOwnersScopeOverlapWarnings,
+  inspectRoleBearingSubgroups,
   inspectUnfilteredUserManagementModeWarnings
 } from '../workflow-templates/workflow-groups-manager/backend/audit_warnings';
 import { handler as wgmHandler } from '../workflow-templates/workflow-groups-manager/backend/index';
@@ -704,5 +705,43 @@ test('workflow-groups-manager handler — enforces index.md allowlist and intern
   assert.deepEqual(deletedOverrides, ['5:attr_scope']);
 
   clearWorkflowCache();
+});
+
+test('workflow-groups-manager audit_warnings — detects role-bearing and Admin-role subgroups under Scope Groups', () => {
+  const activeScopeGroups = [
+    { group_id: '10', group_name: 'Marketing', attribute_name: 'nano_admin_is_workflow_scope_group' }
+  ];
+  const hierarchyByGroupId = new Map([
+    [
+      '10',
+      {
+        max_depth: 1,
+        subgroups: [
+          { group_id: '11', group_name: 'Marketing Safe', depth: 1, parent_group_ids: ['10'], role_ids: [] },
+          { group_id: '12', group_name: 'Marketing Admins', depth: 1, parent_group_ids: ['10'], role_ids: ['r_admin'] }
+        ]
+      }
+    ]
+  ]);
+  const allRoles = [
+    { id: 'r_admin', name: 'Admin', permission_set: { all_access: true, permissions: ['administer'] } }
+  ];
+  const groupRoleIdsMap = new Map<string, string[]>([
+    ['10', []],
+    ['11', []],
+    ['12', ['r_admin']]
+  ]);
+
+  const warnings = inspectRoleBearingSubgroups(
+    activeScopeGroups,
+    hierarchyByGroupId,
+    allRoles,
+    groupRoleIdsMap
+  );
+
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0].subgroup_id, '12');
+  assert.equal(warnings[0].has_admin_role, true);
+  assert.deepEqual(warnings[0].roles, [{ id: 'r_admin', name: 'Admin', is_admin: true }]);
 });
 

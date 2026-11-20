@@ -82,6 +82,12 @@ export async function addUserToGroupAction(
   if (!groupId) {
     throw new Error('group_id is required.');
   }
+  const blockedReason = scope.blockedGroupReasons?.get(groupId);
+  if (blockedReason) {
+    throw new Error(
+      `403 Forbidden: Group "${groupId}" cannot be assigned because it ${blockedReason}.`
+    );
+  }
   if (!scope.manageableGroupIdsSet.has(groupId)) {
     throw new Error(
       `403 Forbidden: Group "${groupId}" is not a member of the invoking admin's Scope Group hierarchy.`
@@ -113,6 +119,12 @@ export async function removeUserFromGroupAction(
 
   if (!groupId) {
     throw new Error('group_id is required.');
+  }
+  const blockedReason = scope.blockedGroupReasons?.get(groupId);
+  if (blockedReason) {
+    throw new Error(
+      `403 Forbidden: Group "${groupId}" cannot be assigned because it ${blockedReason}.`
+    );
   }
   if (!scope.manageableGroupIdsSet.has(groupId)) {
     throw new Error(

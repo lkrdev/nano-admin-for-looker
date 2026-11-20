@@ -946,3 +946,78 @@ test('user-management: default scope_groups_minus_privileged excludes Looker Adm
     /403 Forbidden: Target user "902" does not belong to an allowed user scope/i
   );
 });
+
+test('user-management: resolveManageableGroupHierarchy & add_user_to_group block role-escalating groups and self mode', async () => {
+  const addedMemberships: string[] = [];
+  const sdk = buildMockLookerSdk({
+    all_groups: async () => [
+      { id: '10', name: 'Marketing Scope Group' },
+      { id: '11', name: 'Marketing Subgroup Safe' },
+      { id: '12', name: 'Marketing Subgroup Admin' },
+      { id: '13', name: 'Marketing Subgroup Elevated' },
+      { id: '2', name: 'Looker Admins' }
+    ],
+    search_groups_with_hierarchy: async () => [
+      { id: '10', name: 'Marketing Scope Group', parent_group_ids: [], role_ids: [] },
+      { id: '11', name: 'Marketing Subgroup Safe', parent_group_ids: ['10'], role_ids: ['r_viewer'] },
+      { id: '12', name: 'Marketing Subgroup Admin', parent_group_ids: ['10'], role_ids: ['r_admin'] },
+      { id: '13', name: 'Marketing Subgroup Elevated', parent_group_ids: ['10'], role_ids: ['r_out_of_scope'] },
+      { id: '2', name: 'Looker Admins', parent_group_ids: [], role_ids: ['r_admin'] }
+    ],
+    add_group_user: async (gid: string, body: any) => {
+      addedMemberships.push(`${gid}:${body.user_id}`);
+      return {};
+    }
+  });
+
+  // 1. In scope_groups_minus_privileged mode: safe subgroup '11' is manageable; '12' (Admin) & '13' (elevated) are excluded with clear 403 reason
+  const ctx = makeContext(sdk, { groups: { allow_view: true, allow_edit: true } }, '100');
+  const groupsRes = await handler(ctx, 'get_user_groups', { user_id: '200' });
+  const manageableIds = groupsRes.manageable_groups.map((g: any) => g.id).sort();
+  assert.deepEqual(manageableIds, ['10', '11']);
+
+  await assert.rejects(
+    async () => await handler(ctx, 'add_user_to_group', { user_id: '100', group_id: '12' }),
+    /403 Forbidden: Group "12" cannot be assigned because it grants a Looker Admin role/i
+  );
+  await assert.rejects(
+    async () => await handler(ctx, 'add_user_to_group', { user_id: '100', group_id: '13' }),
+    /403 Forbidden: Group "13" cannot be assigned because it grants Looker role .* exceeding your permissions or model access/i
+  );
+
+  // Safe subgroup '11' succeeds
+  await handler(ctx, 'add_user_to_group', { user_id: '200', group_id: '11' });
+  assert.deepEqual(addedMemberships, ['11:200']);
+
+  // 2. In exclude_privileged mode: Looker Admins group '2' is excluded and blocked
+  const exclCtx = makeContext(
+    sdk,
+    {
+      user_id_limitation: { mode: 'exclude_privileged' },
+      groups: { allow_view: true, allow_edit: true }
+    },
+    '100'
+  );
+  const exclGroupsRes = await handler(exclCtx, 'get_user_groups', { user_id: '200' });
+  assert.equal(exclGroupsRes.manageable_groups.some((g: any) => g.id === '2'), false);
+  await assert.rejects(
+    async () => await handler(exclCtx, 'add_user_to_group', { user_id: '100', group_id: '2' }),
+    /403 Forbidden: Group "2" cannot be assigned because it grants a Looker Admin role/i
+  );
+
+  // 3. In self mode: no groups are manageable and add_user_to_group is rejected
+  const selfCtx = makeContext(
+    sdk,
+    {
+      user_id_limitation: { mode: 'self' },
+      groups: { allow_view: true, allow_edit: true }
+    },
+    '100'
+  );
+  const selfGroupsRes = await handler(selfCtx, 'get_user_groups', { user_id: '100' });
+  assert.deepEqual(selfGroupsRes.manageable_groups, []);
+  await assert.rejects(
+    async () => await handler(selfCtx, 'add_user_to_group', { user_id: '100', group_id: '10' }),
+    /403 Forbidden: Group "10" is not a member of the invoking admin's Scope Group hierarchy/i
+  );
+});

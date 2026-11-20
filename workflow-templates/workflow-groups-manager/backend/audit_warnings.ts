@@ -1,3 +1,4 @@
+import { isRoleAdmin } from '../../../auth_utils';
 import {
   DEFAULT_GROUP_OWNERS_ATTRIBUTE,
   GroupOwnershipRecord,
@@ -49,6 +50,17 @@ export interface UnsafeScopeModeWarning {
   template: string;
   configured_mode: string;
   recommended_mode: string;
+}
+
+export interface RoleBearingSubgroupWarning {
+  scope_group_id: string;
+  scope_group_name: string;
+  attribute_name: string;
+  subgroup_id: string;
+  subgroup_name: string;
+  depth: number;
+  has_admin_role: boolean;
+  roles: Array<{ id: string; name: string; is_admin: boolean }>;
 }
 
 export function findUserMutatingWorkflows(workflows: any[]): Array<{ id: string; label: string; template: string }> {
@@ -312,6 +324,60 @@ export function inspectGroupOwnersScopeOverlapWarnings(
           }
         }
       }
+    }
+  }
+
+  return warnings;
+}
+
+/**
+ * Flags any descendant subgroup under an active Scope Group that carries Looker roles
+ * (directly or via parent groups), which can cause privilege escalation or blocked
+ * group assignments in user-management workflows.
+ */
+export function inspectRoleBearingSubgroups(
+  activeScopeGroups: Array<{ group_id: string; group_name: string; attribute_name: string }>,
+  hierarchyByGroupId: Map<string, { max_depth: number; subgroups: SubgroupInfo[] }>,
+  allRoles: any[],
+  groupRoleIdsMap: Map<string, string[]>
+): RoleBearingSubgroupWarning[] {
+  const rolesById = new Map<string, any>();
+  for (const r of allRoles || []) {
+    if (r?.id !== undefined && r?.id !== null) {
+      rolesById.set(String(r.id), r);
+    }
+  }
+
+  const warnings: RoleBearingSubgroupWarning[] = [];
+
+  for (const sg of activeScopeGroups || []) {
+    const hierarchy = hierarchyByGroupId.get(String(sg.group_id));
+    if (!hierarchy) continue;
+
+    for (const sub of hierarchy.subgroups) {
+      const effectiveRoleIds = new Set<string>(sub.role_ids || []);
+      for (const pid of sub.parent_group_ids || []) {
+        (groupRoleIdsMap.get(String(pid)) || []).forEach((rid) => effectiveRoleIds.add(rid));
+      }
+
+      if (effectiveRoleIds.size === 0) continue;
+
+      const resolvedRoles = Array.from(effectiveRoleIds).map((rid) => {
+        const role = rolesById.get(rid);
+        const roleName = String(role?.name || `Role ${rid}`);
+        return { id: rid, name: roleName, is_admin: isRoleAdmin(role) };
+      });
+
+      warnings.push({
+        scope_group_id: String(sg.group_id),
+        scope_group_name: sg.group_name,
+        attribute_name: sg.attribute_name,
+        subgroup_id: sub.group_id,
+        subgroup_name: sub.group_name,
+        depth: sub.depth,
+        has_admin_role: resolvedRoles.some((r) => r.is_admin),
+        roles: resolvedRoles
+      });
     }
   }
 
