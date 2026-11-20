@@ -78,11 +78,19 @@ export const handler = async (
 
     const userIdField = findUserIdFieldInExplore(exploreMeta, exploreName);
     const limitationRes = await resolveUserIdFilterValues(context, limitation);
-    const queryFilters = buildEnforcedFilters(payload?.filters || {}, limitationRes, userIdField);
-
-    validatePerformancePresets(exploreConfig, payload?.fields || [], queryFilters, exploreMeta);
-
     const rowLimit = calculateRowLimit(payload?.limit, exploreConfig.max_row_limit);
+
+    if (isEmptyActiveScope(limitationRes)) {
+      return {
+        explore_name: exploreName,
+        rows: [],
+        row_count: 0,
+        limit_applied: rowLimit
+      };
+    }
+
+    const queryFilters = buildEnforcedFilters(payload?.filters || {}, limitationRes, userIdField);
+    validatePerformancePresets(exploreConfig, payload?.fields || [], queryFilters, exploreMeta);
 
     const queryResults = await executeInlineQuery(
       context.sdk,
@@ -108,11 +116,17 @@ export const handler = async (
 
     const userIdField = findUserIdFieldInExplore(exploreMeta, exploreName);
     const limitationRes = await resolveUserIdFilterValues(context, limitation);
-    const queryFilters = buildEnforcedFilters(payload?.filters || {}, limitationRes, userIdField);
-
-    validatePerformancePresets(exploreConfig, payload?.fields || [], queryFilters, exploreMeta);
-
     const rowLimit = calculateRowLimit(payload?.limit, exploreConfig.max_row_limit);
+
+    if (isEmptyActiveScope(limitationRes)) {
+      return {
+        explore_name: exploreName,
+        sql: '-- No accessible users in scope; query skipped.'
+      };
+    }
+
+    const queryFilters = buildEnforcedFilters(payload?.filters || {}, limitationRes, userIdField);
+    validatePerformancePresets(exploreConfig, payload?.fields || [], queryFilters, exploreMeta);
 
     const sqlData = await executeInlineQuery(
       context.sdk,
@@ -141,11 +155,17 @@ export const handler = async (
 
     const userIdField = findUserIdFieldInExplore(exploreMeta, exploreName);
     const limitationRes = await resolveUserIdFilterValues(context, limitation);
-    const queryFilters = buildEnforcedFilters(payload?.filters || {}, limitationRes, userIdField);
-
-    validatePerformancePresets(exploreConfig, payload?.fields || [], queryFilters, exploreMeta);
-
     const rowLimit = calculateRowLimit(payload?.limit, exploreConfig.max_row_limit);
+
+    if (isEmptyActiveScope(limitationRes)) {
+      return {
+        explore_name: exploreName,
+        csv_data: ''
+      };
+    }
+
+    const queryFilters = buildEnforcedFilters(payload?.filters || {}, limitationRes, userIdField);
+    validatePerformancePresets(exploreConfig, payload?.fields || [], queryFilters, exploreMeta);
 
     const csvData = await executeInlineQuery(
       context.sdk,
@@ -298,6 +318,10 @@ async function resolveUserIdFilterValues(
   return await resolveUserIdLimitation(context.sdk, context.userId, limitation, 'self');
 }
 
+function isEmptyActiveScope(resolution: UserIdLimitationResult): boolean {
+  return Boolean(resolution.active && (!resolution.userIds || resolution.userIds.length === 0));
+}
+
 function buildEnforcedFilters(
   userFilters: Record<string, string>,
   resolution: UserIdLimitationResult,
@@ -306,12 +330,11 @@ function buildEnforcedFilters(
   const filters: Record<string, string> = { ...userFilters };
 
   if (resolution.active) {
-    const fieldName = userIdFieldName || 'user.id';
     if (!resolution.userIds || resolution.userIds.length === 0) {
-      filters[fieldName] = '-*'; // Matches no users if no scope group user IDs found
-    } else {
-      filters[fieldName] = resolution.userIds.join(',');
+      throw new Error('Cannot build query filters: active user scope resolved to zero users.');
     }
+    const fieldName = userIdFieldName || 'user.id';
+    filters[fieldName] = resolution.userIds.join(',');
   }
 
   return filters;
