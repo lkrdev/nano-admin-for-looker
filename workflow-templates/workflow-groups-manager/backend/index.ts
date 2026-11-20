@@ -154,6 +154,12 @@ const INTERNAL_BLOCKED_ATTRIBUTE_NAMES = new Set<string>([
   'nano_admin_admin_extension_nano_admin_challenge'
 ]);
 
+function classifyScopeAttributeValue(rawValue: unknown): 'yes' | 'non_yes' | 'empty' {
+  const clean = String(rawValue ?? '').trim().toLowerCase();
+  if (!clean) return 'empty';
+  return clean === 'yes' ? 'yes' : 'non_yes';
+}
+
 function isInternalBlockedAttribute(attrName: string, attrObj?: any): boolean {
   const lower = attrName.trim().toLowerCase();
   if (
@@ -403,6 +409,23 @@ async function executeGroupsAudit(
         template: wf.template
       }));
 
+    if (isInternalBlockedAttribute(attrName, targetAttr) || targetAttr?.value_is_hidden) {
+      scopeAttributeAudits.push({
+        attribute_name: attrName,
+        attribute_id: targetAttr ? String(targetAttr.id) : null,
+        exists: Boolean(targetAttr),
+        blocked: true,
+        blocked_reason: targetAttr?.value_is_hidden
+          ? 'Hidden user attributes cannot be audited as Scope Group attributes.'
+          : 'Attribute is system-protected and cannot be used as a Scope Group attribute.',
+        groups_tagged_count: 0,
+        groups_yes_count: 0,
+        tagged_groups: [],
+        used_by_workflows: usedByWorkflows
+      });
+      continue;
+    }
+
     if (!targetAttr) {
       scopeAttributeAudits.push({
         attribute_name: attrName,
@@ -466,7 +489,7 @@ async function executeGroupsAudit(
         taggedGroups.push({
           group_id: groupId,
           group_name: groupObj?.name || `Group ${groupId}`,
-          value: gv.value,
+          value_classification: 'yes',
           is_active_scope: true,
           user_count: groupUsers.length,
           owner_count: ownRec ? ownRec.owner_count : 0,
@@ -485,7 +508,7 @@ async function executeGroupsAudit(
         taggedGroups.push({
           group_id: groupId,
           group_name: groupObj?.name || `Group ${groupId}`,
-          value: gv.value,
+          value_classification: classifyScopeAttributeValue(gv.value),
           is_active_scope: false,
           user_count: 0,
           owner_count: ownRec ? ownRec.owner_count : 0,
@@ -526,7 +549,7 @@ async function executeGroupsAudit(
             user_email: uObj?.email || '',
             attribute_name: attrName,
             attribute_id: String(targetAttr.id),
-            value: uv.value
+            value_classification: classifyScopeAttributeValue(uv.value)
           });
         }
       });

@@ -528,7 +528,7 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                     }}
                   >
                     <span style={{ fontSize: '12px', color: '#334155' }}>
-                      <strong>{item.user_name}</strong> ({item.user_email}) — Attribute: <code>{item.attribute_name}</code> = <code>{item.value}</code>
+                      <strong>{item.user_name}</strong> ({item.user_email}) — Attribute: <code>{item.attribute_name}</code> ({item.value_classification === 'yes' ? 'yes' : item.value_classification === 'empty' ? 'empty' : 'non-yes override'})
                     </span>
                     <button
                       onClick={() => handleRemoveUserOverride(item.user_id, item.attribute_id)}
@@ -722,11 +722,19 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                     <h4 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#0f172a' }}>
                       <code>{attr.attribute_name}</code>
                     </h4>
-                    <span style={{ fontSize: '12px', color: '#64748b' }}>
-                      {attr.exists ? 'Attribute defined in Looker' : 'Not found in Looker'}
+                    <span style={{ fontSize: '12px', color: attr.blocked ? '#b91c1c' : '#64748b' }}>
+                      {attr.blocked
+                        ? attr.blocked_reason || 'Disallowed Scope Group attribute'
+                        : attr.exists
+                          ? 'Attribute defined in Looker'
+                          : 'Not found in Looker'}
                     </span>
                   </div>
-                  {attr.exists ? (
+                  {attr.blocked ? (
+                    <span style={{ fontSize: '12px', fontWeight: 600, color: '#b91c1c', background: '#fef2f2', padding: '4px 8px', borderRadius: '4px' }}>
+                      Disallowed
+                    </span>
+                  ) : attr.exists ? (
                     <span style={{ fontSize: '12px', fontWeight: 600, color: '#059669', background: '#ecfdf5', padding: '4px 8px', borderRadius: '4px' }}>
                       {attr.groups_yes_count} Active Scope Group(s)
                     </span>
@@ -794,7 +802,9 @@ export const WorkflowGroupsManager: React.FC<WorkflowComponentProps> = ({
                             {g.is_active_scope ? (
                               <span style={{ color: '#16a34a', fontWeight: 600 }}>Active ('yes')</span>
                             ) : (
-                              <span style={{ color: '#94a3b8' }}>Inactive ('{g.value || 'none'}')</span>
+                              <span style={{ color: '#94a3b8' }}>
+                                Inactive ({g.value_classification === 'empty' ? 'empty' : 'non-yes value'})
+                              </span>
                             )}
                           </td>
                           <td style={{ padding: '8px' }}>{g.user_count} user(s)</td>

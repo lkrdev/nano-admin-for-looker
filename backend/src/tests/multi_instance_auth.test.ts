@@ -608,6 +608,25 @@ test('workflow-groups-manager handler — supports dev index_content override, i
   assert.equal(auditRes.workflow_access_matrix.length, 1);
   assert.equal(auditRes.workflow_access_matrix[0].workflow_id, 'dev-only-wf');
   assert.equal(auditRes.workflow_access_matrix[0].authorized_groups[0].owner_count, 1);
+  assert.equal('value' in auditRes.scope_attributes[0].tagged_groups[0], false);
+  assert.equal(auditRes.scope_attributes[0].tagged_groups[0].value_classification, 'yes');
+
+  const blockedIndexMd = [
+    'workflows:',
+    '  - id: bad-attr-wf',
+    '    template: user-management',
+    '    parameters:',
+    '      user_id_limitation:',
+    '        mode: scope_groups',
+    '        attribute_name: nano_admin_challenge'
+  ].join('\n');
+  const blockedAuditRes = await wgmHandler(ctx, 'get_groups_audit', { index_content: blockedIndexMd });
+  const blockedAttr = blockedAuditRes.scope_attributes.find(
+    (a: any) => a.attribute_name === 'nano_admin_challenge'
+  );
+  assert.equal(blockedAttr?.blocked, true);
+  assert.match(blockedAttr?.blocked_reason || '', /system-protected/i);
+  assert.deepEqual(blockedAttr?.tagged_groups, []);
 
   const inspectRes = await wgmHandler(ctx, 'inspect_group', { group_id: '10' });
   assert.equal(inspectRes.group.id, '10');
