@@ -1,7 +1,11 @@
 import * as ff from '@google-cloud/functions-framework';
 import cors from 'cors';
 import { authenticateRequestAsync } from './auth';
-import { checkRateLimit, refreshChallenge } from './challenge';
+import {
+  checkChallengeRefreshRateLimits,
+  refreshChallenge,
+  releaseChallengeRefreshSlot
+} from './challenge';
 import { handleOAuthAuthorize, handleOAuthTokenExchange } from './oauth';
 import { actionRegistry } from './actions/registry';
 import { initLookerBackendSDK, LookerBackendSDK, wrapLookerSDKWithLogging, formatHostForLog } from './looker_logging_sdk';
@@ -175,10 +179,7 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
         return;
       }
 
-      const rateLimitKey = (trustedInstanceHost && userId)
-        ? `${trustedInstanceHost}_${userId}`
-        : (req.ip || 'global');
-      const allowed = checkRateLimit(rateLimitKey);
+      const allowed = checkChallengeRefreshRateLimits(trustedInstanceHost, userId, req.ip);
       if (!allowed) {
         console.warn(`Rate limit exceeded for client: ${formatHostForLog(trustedInstanceHost)}_${userId}`);
         res.status(429).json({ error: 'too_many_requests', message: 'Rate limit exceeded. Please try again later.' });
@@ -201,7 +202,12 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
       return;
     }
 
-    // Status is 'valid': Perform asynchronous sliding refresh if challenge token is older than 1 hour
+    // Status is 'valid': If this was a newly provisioned challenge (<=10s old), refund the global/IP slot
+    if (authMode !== 'oauth' && tokenAgeMs !== undefined && tokenAgeMs <= 10_000) {
+      releaseChallengeRefreshSlot(String(req.headers['authorization'] || ''), req.ip);
+    }
+
+    // Perform asynchronous sliding refresh if challenge token is older than 1 hour
     const SLIDING_REFRESH_THRESHOLD_MS = 1 * 60 * 60 * 1000; // 1 hour
     if (authMode !== 'oauth' && tokenAgeMs !== undefined && tokenAgeMs > SLIDING_REFRESH_THRESHOLD_MS) {
       if (checkSlidingRefreshCooldown(trustedInstanceHost, userId)) {

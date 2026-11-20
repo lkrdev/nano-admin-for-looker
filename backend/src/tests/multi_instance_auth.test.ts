@@ -4,7 +4,17 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { resolveAuthorizedGroups, isUserAuthorized, clearWorkflowCache, setCachedWorkflows, getPrivilegedUserIds } from '../auth_utils';
 import { isHostAllowed, authenticateRequest } from '../auth';
-import { getChallengeAttributeId, refreshChallenge, clearChallengeAttributeIdCache } from '../challenge';
+import {
+  getChallengeAttributeId,
+  refreshChallenge,
+  clearChallengeAttributeIdCache,
+  checkRateLimit,
+  checkChallengeRefreshRateLimits,
+  releaseChallengeRefreshSlot,
+  clearRateLimitsForTest,
+  getRateLimitMapSizeForTest,
+  MAX_RATE_LIMIT_ENTRIES
+} from '../challenge';
 import { validateWorkflowsSchema } from '../actions/validate_dev_index';
 import { formatHostForLog, wrapLookerSDKWithLogging } from '../looker_logging_sdk';
 import {
@@ -791,5 +801,62 @@ test('getPrivilegedUserIds — detects group-inherited Admin roles and fails clo
     }
   };
   await assert.rejects(async () => await getPrivilegedUserIds(failingUsersSdk), /429 Too Many Requests/);
+});
+
+test('checkRateLimit & authenticateRequest — reject >10 char X-Looker-User-ID and bound refreshLimits map', () => {
+  const prevAllowed = process.env.LOOKER_ALLOWED_INSTANCES;
+  process.env.LOOKER_ALLOWED_INSTANCES = 'dev.looker.app';
+  clearRateLimitsForTest();
+
+  try {
+    // 1. Non-canonical or >10 char X-Looker-User-ID is rejected early in authenticateRequest
+    for (const badId of ['12345678901', '00042', 'abc', '0']) {
+      const badIdRes = authenticateRequest({
+        headers: {
+          'authorization': 'looker-attribute-challenge bad',
+          'x-looker-user-id': badId,
+          'x-looker-instance-host': 'dev.looker.app'
+        }
+      } as any);
+      assert.equal(badIdRes.status, 'invalid');
+      assert.equal(badIdRes.trustedUserId, '');
+    }
+
+    // 2. Per-IP limit (10 / 5min) blocks rotating X-Looker-User-ID from same IP,
+    //    and global limit (100 / 1min) blocks distributed failures across IPs
+    for (let i = 1; i <= 10; i++) {
+      assert.equal(checkChallengeRefreshRateLimits('dev.looker.app', String(i), '1.2.3.4'), true);
+    }
+    assert.equal(checkChallengeRefreshRateLimits('dev.looker.app', '11', '1.2.3.4'), false);
+
+    // Completing a valid handshake refunds a global/IP slot once per token, allowing another login
+    releaseChallengeRefreshSlot('looker-attribute-challenge valid_tok_1', '1.2.3.4');
+    // Replaying the exact same token does not refund a second slot
+    releaseChallengeRefreshSlot('looker-attribute-challenge valid_tok_1', '1.2.3.4');
+    assert.equal(checkChallengeRefreshRateLimits('dev.looker.app', '11', '1.2.3.4'), true);
+    assert.equal(checkChallengeRefreshRateLimits('dev.looker.app', '12', '1.2.3.4'), false);
+    clearRateLimitsForTest();
+
+    // Global 100/min cap across different IPs
+    for (let i = 1; i <= 100; i++) {
+      assert.equal(checkChallengeRefreshRateLimits('dev.looker.app', String(i), `10.0.${Math.floor(i / 250)}.${i % 250}`), true);
+    }
+    assert.equal(checkChallengeRefreshRateLimits('dev.looker.app', '101', '9.9.9.9'), false);
+    clearRateLimitsForTest();
+
+    // 2. Oversized key is rejected in checkRateLimit
+    assert.equal(checkRateLimit('x'.repeat(257)), false);
+
+    // 3. Map is bounded at MAX_RATE_LIMIT_ENTRIES and fails closed when full
+    for (let i = 0; i < MAX_RATE_LIMIT_ENTRIES; i++) {
+      assert.equal(checkRateLimit(`dev.looker.app_${i}`), true);
+    }
+    assert.equal(getRateLimitMapSizeForTest(), MAX_RATE_LIMIT_ENTRIES);
+    assert.equal(checkRateLimit('dev.looker.app_overflow'), false);
+    assert.equal(getRateLimitMapSizeForTest(), MAX_RATE_LIMIT_ENTRIES);
+  } finally {
+    clearRateLimitsForTest();
+    process.env.LOOKER_ALLOWED_INSTANCES = prevAllowed;
+  }
 });
 

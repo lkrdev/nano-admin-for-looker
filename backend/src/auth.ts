@@ -10,6 +10,8 @@ import {
   verifyLookerOAuthToken
 } from './oauth';
 
+const CANONICAL_LOOKER_USER_ID_REGEX = /^[1-9]\d{0,9}$/;
+
 export interface AuthenticationResult {
   trustedInstanceHost: string;
   trustedUserId: string;
@@ -65,6 +67,10 @@ export function authenticateRequest(req: ff.Request): AuthenticationResult {
   }
 
   const userId = String(lookerUserIdHeader).trim();
+  if (!CANONICAL_LOOKER_USER_ID_REGEX.test(userId)) {
+    console.log('[DEBUG] authenticateRequest: X-Looker-User-ID must be a canonical numeric ID (max 10 digits)');
+    return { trustedInstanceHost: sanitizedHost, trustedUserId: '', userId: '', status: 'invalid', authMode: effectiveMode };
+  }
 
   if (!authHeader.startsWith('looker-attribute-challenge ')) {
     console.log('[DEBUG] authenticateRequest: Authorization header is not formatted with looker-attribute-challenge prefix');
@@ -112,6 +118,15 @@ export async function authenticateRequestAsync(
     }
 
     const claimedUserId = lookerUserIdHeader ? String(lookerUserIdHeader).trim() : '';
+    if (claimedUserId && !CANONICAL_LOOKER_USER_ID_REGEX.test(claimedUserId)) {
+      return {
+        trustedInstanceHost: sanitizedHost,
+        trustedUserId: '',
+        userId: '',
+        status: 'invalid',
+        authMode: 'oauth'
+      };
+    }
     const accessToken = authHeader.substring('Bearer '.length).trim();
 
     if (!accessToken) {

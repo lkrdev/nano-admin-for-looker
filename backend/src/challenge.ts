@@ -12,24 +12,137 @@ const HMAC_SECRET: string = process.env.GCF_HMAC_SECRET;
 
 export type ChallengeVerificationResult = 'valid' | 'expired' | 'invalid' | 'missing';
 
-const refreshLimits = new Map<string, { count: number; resetTime: number }>();
+const GLOBAL_RATE_LIMIT_WINDOW_MS = 60_000; // 1 minute
+const PER_CLIENT_RATE_LIMIT_WINDOW_MS = 300_000; // 5 minutes
+const RATE_LIMIT_SWEEP_INTERVAL_MS = 60_000;
+const RATE_LIMIT_SWEEP_THRESHOLD = 1_000;
+export const MAX_RATE_LIMIT_ENTRIES = 10_000;
+const MAX_RATE_LIMIT_KEY_LENGTH = 256;
 
-export function checkRateLimit(userId: string): boolean {
+function parsePositiveIntEnv(envName: string, fallback: number): number {
+  const raw = process.env[envName];
+  if (!raw) return fallback;
+  const parsed = parseInt(raw, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const refreshLimits = new Map<string, { count: number; resetTime: number }>();
+const refundedChallengeTokens = new Set<string>();
+let lastRateLimitSweepAt = 0;
+
+export function clearRateLimitsForTest(): void {
+  refreshLimits.clear();
+  refundedChallengeTokens.clear();
+  lastRateLimitSweepAt = 0;
+}
+
+export function getRateLimitMapSizeForTest(): number {
+  return refreshLimits.size;
+}
+
+function sweepExpiredRateLimits(now: number): void {
+  lastRateLimitSweepAt = now;
+  for (const [key, entry] of refreshLimits.entries()) {
+    if (now > entry.resetTime) {
+      refreshLimits.delete(key);
+    }
+  }
+}
+
+export function checkRateLimit(
+  userId: string,
+  maxRequests: number = 10,
+  windowMs: number = PER_CLIENT_RATE_LIMIT_WINDOW_MS
+): boolean {
+  if (!userId || userId.length > MAX_RATE_LIMIT_KEY_LENGTH) {
+    return false;
+  }
+
   const now = Date.now();
+  if (
+    refreshLimits.size >= RATE_LIMIT_SWEEP_THRESHOLD &&
+    now - lastRateLimitSweepAt >= RATE_LIMIT_SWEEP_INTERVAL_MS
+  ) {
+    sweepExpiredRateLimits(now);
+  }
+
   const limit = refreshLimits.get(userId);
 
   if (!limit || now > limit.resetTime) {
-    // Limit: 10 refreshes per 10 seconds
-    refreshLimits.set(userId, { count: 1, resetTime: now + 10000 });
+    if (!limit && refreshLimits.size >= MAX_RATE_LIMIT_ENTRIES) {
+      if (now - lastRateLimitSweepAt >= RATE_LIMIT_SWEEP_INTERVAL_MS) {
+        sweepExpiredRateLimits(now);
+      }
+      if (refreshLimits.size >= MAX_RATE_LIMIT_ENTRIES) {
+        return false;
+      }
+    }
+    refreshLimits.set(userId, { count: 1, resetTime: now + windowMs });
     return true;
   }
 
-  if (limit.count >= 10) {
+  if (limit.count >= maxRequests) {
     return false;
   }
 
   limit.count++;
   return true;
+}
+
+/**
+ * Enforces layered rate limits on unauthenticated/failed challenge refreshes only:
+ * 1. Global budget: max 100 refreshes per 1 minute (override: CHALLENGE_GLOBAL_RATE_LIMIT_PER_MIN)
+ * 2. Per-IP budget: max 10 refreshes per 5 minutes (override: CHALLENGE_IP_RATE_LIMIT_PER_5MIN)
+ * 3. Per-user-and-host budget: max 10 refreshes per 5 minutes (override: CHALLENGE_USER_RATE_LIMIT_PER_5MIN)
+ */
+export function checkChallengeRefreshRateLimits(
+  instanceHost: string,
+  userId: string,
+  clientIp?: string
+): boolean {
+  const globalMax = parsePositiveIntEnv('CHALLENGE_GLOBAL_RATE_LIMIT_PER_MIN', 100);
+  const ipMax = parsePositiveIntEnv('CHALLENGE_IP_RATE_LIMIT_PER_5MIN', 10);
+  const userMax = parsePositiveIntEnv('CHALLENGE_USER_RATE_LIMIT_PER_5MIN', 10);
+
+  if (!checkRateLimit('__global_refresh__', globalMax, GLOBAL_RATE_LIMIT_WINDOW_MS)) {
+    return false;
+  }
+  if (clientIp && !checkRateLimit(`ip:${clientIp}`, ipMax, PER_CLIENT_RATE_LIMIT_WINDOW_MS)) {
+    return false;
+  }
+  return checkRateLimit(`${instanceHost}_${userId}`, userMax, PER_CLIENT_RATE_LIMIT_WINDOW_MS);
+}
+
+/**
+ * Refunds one slot from the global and per-IP unauthenticated challenge-refresh
+ * budgets when a freshly issued challenge token succeeds authentication, so high
+ * volumes of legitimate 2-step serverProxy logins do not exhaust the failure budget.
+ */
+export function releaseChallengeRefreshSlot(token: string, clientIp?: string): void {
+  if (!token) return;
+  const tokenHash = hashForLog(token);
+  if (refundedChallengeTokens.has(tokenHash)) {
+    return;
+  }
+  if (refundedChallengeTokens.size >= RATE_LIMIT_SWEEP_THRESHOLD) {
+    refundedChallengeTokens.clear();
+  }
+  refundedChallengeTokens.add(tokenHash);
+
+  decrementRateLimitCount('__global_refresh__');
+  if (clientIp) {
+    decrementRateLimitCount(`ip:${clientIp}`);
+  }
+}
+
+function decrementRateLimitCount(key: string): void {
+  const entry = refreshLimits.get(key);
+  if (!entry) return;
+  if (entry.count <= 1) {
+    refreshLimits.delete(key);
+  } else {
+    entry.count--;
+  }
 }
 
 export function generateChallengeToken(instanceHost: string, userId: string): string {
