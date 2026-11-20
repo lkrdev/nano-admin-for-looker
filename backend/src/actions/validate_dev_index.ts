@@ -1,6 +1,7 @@
 import fs from 'fs';
-import path from 'path';
 import { parseYamlWithStatus } from '../auth_utils';
+import { resolveTemplateSubpath } from './execute_workflow';
+import { getTemplateManifest } from './get_workflows';
 import { ActionHandler } from './registry';
 
 export const validateDevIndexHandler: ActionHandler = async (_sdk, _userId, payload) => {
@@ -145,22 +146,9 @@ export function validateWorkflowsSchema(parsedData: any): { valid: boolean; erro
   return { valid: true, workflows: sanitizedWorkflows };
 }
 
-function getTemplateManifest(templateId: string): any {
-  try {
-    const manifestPath = path.resolve(__dirname, '..', 'workflow-templates', templateId, 'manifest.json');
-    if (fs.existsSync(manifestPath)) {
-      const content = fs.readFileSync(manifestPath, 'utf8');
-      return JSON.parse(content);
-    }
-  } catch (e) {
-    // Ignore manifest read error
-  }
-  return {};
-}
-
 function checkTemplateExists(templateId: string): boolean {
   try {
-    const templateDir = path.resolve(__dirname, '..', 'workflow-templates', templateId);
+    const templateDir = resolveTemplateSubpath(templateId, '.');
     return fs.existsSync(templateDir) && fs.statSync(templateDir).isDirectory();
   } catch {
     return false;

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 
 import { resolveTemplateBackendPath, resolveTemplateSubpath } from '../actions/execute_workflow';
 import { getTemplateManifest } from '../actions/get_workflows';
+import { validateWorkflowsSchema } from '../actions/validate_dev_index';
 
 test('resolveTemplateBackendPath — rejects path traversal and invalid template IDs with 400', () => {
   const invalidTemplates: unknown[] = [
@@ -68,4 +69,12 @@ test('resolveTemplateSubpath & getTemplateManifest — rejects invalid/traversal
 
   const validManifestPath = resolveTemplateSubpath('user-management', 'manifest.json');
   assert.ok(validManifestPath.endsWith(path.join('workflow-templates', 'user-management', 'manifest.json')));
+
+  for (const badPath of ['/proc/1', '/etc', '../../../../etc', '../auth_utils']) {
+    const res = validateWorkflowsSchema({
+      workflows: [{ id: 'probe', label: 'Probe', template: badPath }]
+    });
+    assert.equal(res.valid, false);
+    assert.match(res.error || '', /references non-existent template/i);
+  }
 });
