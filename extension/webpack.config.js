@@ -37,13 +37,11 @@ module.exports = (env, argv) => {
       ]
     },
     devServer: {
+      host: '127.0.0.1',
       port: 8080,
       server: 'https',
-      headers: {
-        'Access-Control-Allow-Origin': '*'
-      },
       historyApiFallback: true,
-      allowedHosts: 'all',
+      allowedHosts: ['localhost', '127.0.0.1'],
       hot: false,
       liveReload: false,
       client: false
