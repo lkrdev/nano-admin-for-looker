@@ -87,7 +87,22 @@ export async function getUserDetailAction(
   const targetUserId = String(payload?.user_id || '').trim();
   assertTargetUserInScope(targetUserId, scope);
 
-  const user = await context.sdk.ok(context.sdk.user(targetUserId));
+  const canViewGroups = Boolean(params.groups.allow_view);
+  const canViewRoles = Boolean(params.roles.allow_view);
+  const canViewFolderAccess = Boolean(params.folder_access.allow_view);
+  const fields = [
+    'id',
+    'first_name',
+    'last_name',
+    'display_name',
+    'email',
+    'is_disabled',
+    ...(canViewGroups ? ['group_ids'] : []),
+    ...(canViewRoles ? ['role_ids'] : []),
+    ...(canViewFolderAccess ? ['personal_folder_id', 'home_folder_id'] : [])
+  ].join(',');
+
+  const user = await context.sdk.ok(context.sdk.user(targetUserId, fields));
   return {
     user: {
       id: String(user.id),
@@ -100,10 +115,13 @@ export async function getUserDetailAction(
         `User ${user.id}`,
       email: user.email || '',
       is_disabled: Boolean(user.is_disabled),
-      group_ids: (user.group_ids || []).map((g: any) => String(g)),
-      role_ids: (user.role_ids || []).map((r: any) => String(r)),
-      personal_folder_id: user.personal_folder_id ? String(user.personal_folder_id) : null,
-      home_folder_id: user.home_folder_id ? String(user.home_folder_id) : null
+      group_ids: canViewGroups
+        ? (user.group_ids || []).map((g: any) => String(g)).filter((gid: string) => scope.manageableGroupIdsSet.has(gid))
+        : [],
+      role_ids: canViewRoles ? (user.role_ids || []).map((r: any) => String(r)) : [],
+      personal_folder_id:
+        canViewFolderAccess && user.personal_folder_id ? String(user.personal_folder_id) : null,
+      home_folder_id: canViewFolderAccess && user.home_folder_id ? String(user.home_folder_id) : null
     },
     capabilities: params
   };

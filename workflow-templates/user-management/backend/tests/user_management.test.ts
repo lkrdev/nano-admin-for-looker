@@ -1344,3 +1344,68 @@ test('user-management: list_users respects groups.allow_view and roles.allow_vie
   assert.deepEqual(groupViewRes.users[0].direct_roles, []);
   assert.equal(groupViewRes.scope_info.manageable_groups[0]?.role_ids, undefined);
 });
+
+test('user-management: get_user_detail requests minimal fields and enforces allow_view for groups, roles, and folders', async () => {
+  const capturedUserFields: Array<{ id: string; fields?: string }> = [];
+  const sdk = buildMockLookerSdk({
+    user: async (id: string, fields?: string) => {
+      capturedUserFields.push({ id: String(id), fields });
+      return {
+        id: String(id),
+        first_name: 'Bob',
+        last_name: 'Builder',
+        display_name: 'Bob Builder',
+        email: 'bob@example.com',
+        is_disabled: false,
+        group_ids: ['10', '999'],
+        role_ids: ['5'],
+        personal_folder_id: '123',
+        home_folder_id: '456'
+      };
+    }
+  });
+
+  // 1. All allow_view flags disabled
+  const restrictedCtx = makeContext(
+    sdk,
+    {
+      groups: { allow_view: false },
+      roles: { allow_view: false },
+      folder_access: { allow_view: false }
+    },
+    '100'
+  );
+  const restrictedRes = await handler(restrictedCtx, 'get_user_detail', { user_id: '200' });
+  const restrictedCall = capturedUserFields.find(
+    (c) => c.id === '200' && c.fields !== 'id,group_ids' && c.fields !== 'id,role_ids,group_ids'
+  );
+  assert.equal(restrictedCall?.fields, 'id,first_name,last_name,display_name,email,is_disabled');
+  assert.deepEqual(restrictedRes.user.group_ids, []);
+  assert.deepEqual(restrictedRes.user.role_ids, []);
+  assert.equal(restrictedRes.user.personal_folder_id, null);
+  assert.equal(restrictedRes.user.home_folder_id, null);
+
+  // 2. All allow_view flags enabled: external group '999' is still filtered out
+  capturedUserFields.length = 0;
+  const allowedCtx = makeContext(
+    sdk,
+    {
+      groups: { allow_view: true },
+      roles: { allow_view: true },
+      folder_access: { allow_view: true }
+    },
+    '100'
+  );
+  const allowedRes = await handler(allowedCtx, 'get_user_detail', { user_id: '200' });
+  const allowedCall = capturedUserFields.find(
+    (c) => c.id === '200' && c.fields !== 'id,group_ids' && c.fields !== 'id,role_ids,group_ids'
+  );
+  assert.equal(
+    allowedCall?.fields,
+    'id,first_name,last_name,display_name,email,is_disabled,group_ids,role_ids,personal_folder_id,home_folder_id'
+  );
+  assert.deepEqual(allowedRes.user.group_ids, ['10']);
+  assert.deepEqual(allowedRes.user.role_ids, ['5']);
+  assert.equal(allowedRes.user.personal_folder_id, '123');
+  assert.equal(allowedRes.user.home_folder_id, '456');
+});

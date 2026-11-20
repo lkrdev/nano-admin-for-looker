@@ -2,6 +2,9 @@
 
 - `looker-cli --token-file` may be available in our dev environment to interact with the current Looker instance being used
 
+# Looker SDK & API Performance
+- Always pass the `fields` parameter on Looker SDK API calls by default to request only the minimum fields required for the operation, both to improve API performance and to minimize sensitive data exposure.
+
 # Open Source Hygiene
 - Avoid corporate-specific, internal, or proprietary terminology, tool names, or network proxy references (e.g. internal proxies, helper binaries, or internal package managers).
 - Keep all log statements, comments, and troubleshooting diagnostics completely generic and standards-compliant.
