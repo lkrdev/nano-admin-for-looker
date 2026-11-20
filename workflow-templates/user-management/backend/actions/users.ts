@@ -12,17 +12,32 @@ export async function listUsersAction(
   scope: ResolvedScopeContext
 ): Promise<any> {
   const sdk = context.sdk;
+  const canViewGroups = Boolean(params.groups.allow_view);
+  const canViewRoles = Boolean(params.roles.allow_view);
+  const userFields = [
+    'id',
+    'first_name',
+    'last_name',
+    'display_name',
+    'email',
+    'is_disabled',
+    'group_ids',
+    ...(canViewRoles ? ['role_ids'] : [])
+  ].join(',');
+
   const allUsers = await sdk.ok(
     sdk.all_users({
-      fields: 'id,first_name,last_name,display_name,email,is_disabled,group_ids,role_ids,personal_folder_id,home_folder_id'
+      fields: userFields
     })
   );
 
   const inScopeUsers = filterUsersByScope(allUsers || [], scope);
-  const rolesMap = await fetchRolesNameMap(sdk);
+  const rolesMap = canViewRoles ? await fetchRolesNameMap(sdk) : new Map<string, string>();
   const groupNameMap = new Map<string, string>();
-  for (const mg of scope.manageableGroups) {
-    groupNameMap.set(mg.id, mg.name);
+  if (canViewGroups) {
+    for (const mg of scope.manageableGroups) {
+      groupNameMap.set(mg.id, mg.name);
+    }
   }
 
   let creationAttributes: any[] = [];
@@ -35,7 +50,19 @@ export async function listUsersAction(
     }
   }
 
-  const users = inScopeUsers.map((u: any) => formatUserSummary(u, scope, groupNameMap, rolesMap));
+  const users = inScopeUsers.map((u: any) =>
+    formatUserSummary(u, scope, groupNameMap, rolesMap, canViewGroups, canViewRoles)
+  );
+
+  const exposedManageableGroups =
+    canViewGroups || params.profile.allow_create
+      ? scope.manageableGroups.map((g) => ({
+          id: g.id,
+          name: g.name,
+          is_scope_group: g.is_scope_group,
+          ...(canViewRoles && g.role_ids ? { role_ids: g.role_ids } : {})
+        }))
+      : [];
 
   return {
     users,
@@ -44,8 +71,8 @@ export async function listUsersAction(
     scope_info: {
       mode: scope.limitation.mode,
       attribute_name: scope.attributeName,
-      active_scope_groups: scope.manageableGroups.filter((g) => g.is_scope_group),
-      manageable_groups: scope.manageableGroups
+      active_scope_groups: exposedManageableGroups.filter((g) => g.is_scope_group),
+      manageable_groups: exposedManageableGroups
     },
     creation_attributes: creationAttributes
   };
@@ -285,14 +312,14 @@ export async function updateUserProfileAction(
 
   let updatedUser: any = null;
   if (Object.keys(updateBody).length > 0) {
-    updatedUser = await context.sdk.ok(context.sdk.update_user(targetUserId, updateBody));
+    updatedUser = await context.sdk.ok(context.sdk.update_user(targetUserId, updateBody, 'id'));
   } else {
-    updatedUser = await context.sdk.ok(context.sdk.user(targetUserId));
+    updatedUser = await context.sdk.ok(context.sdk.user(targetUserId, 'id'));
   }
 
   return {
     success: true,
-    user: updatedUser,
+    user: { id: String(updatedUser?.id || targetUserId) },
     message: `Updated profile for user ${targetUserId}.`
   };
 }
@@ -312,12 +339,12 @@ export async function setUserDisabledAction(
 
   const isDisabled = Boolean(payload?.is_disabled);
   const updated = await context.sdk.ok(
-    context.sdk.update_user(targetUserId, { is_disabled: isDisabled })
+    context.sdk.update_user(targetUserId, { is_disabled: isDisabled }, 'id')
   );
 
   return {
     success: true,
-    user: updated,
+    user: { id: String(updated?.id || targetUserId) },
     message: `User ${targetUserId} has been ${isDisabled ? 'disabled' : 'enabled'}.`
   };
 }
@@ -373,27 +400,33 @@ function formatUserSummary(
   u: any,
   scope: ResolvedScopeContext,
   groupNameMap: Map<string, string>,
-  rolesMap: Map<string, string>
+  rolesMap: Map<string, string>,
+  canViewGroups: boolean,
+  canViewRoles: boolean
 ): any {
   const uid = String(u.id);
-  const userGroupIds: string[] = (u.group_ids || []).map((g: any) => String(g));
-  const userRoleIds: string[] = (u.role_ids || []).map((r: any) => String(r));
+  const userGroupIds: string[] = canViewGroups
+    ? (u.group_ids || []).map((g: any) => String(g)).filter((gid: string) => scope.manageableGroupIdsSet.has(gid))
+    : [];
+  const userRoleIds: string[] = canViewRoles ? (u.role_ids || []).map((r: any) => String(r)) : [];
 
-  const sharedScopeGroupIds = userGroupIds.filter((gid) =>
-    scope.adminActiveScopeGroupIds.includes(gid)
-  );
-  const manageableGroupMemberships = userGroupIds
-    .filter((gid) => scope.manageableGroupIdsSet.has(gid))
-    .map((gid) => ({
-      id: gid,
-      name: groupNameMap.get(gid) || `Group ${gid}`,
-      is_scope_group: scope.adminActiveScopeGroupIds.includes(gid)
-    }));
+  const sharedScopeGroupIds = canViewGroups
+    ? userGroupIds.filter((gid) => scope.adminActiveScopeGroupIds.includes(gid))
+    : [];
+  const manageableGroupMemberships = canViewGroups
+    ? userGroupIds.map((gid) => ({
+        id: gid,
+        name: groupNameMap.get(gid) || `Group ${gid}`,
+        is_scope_group: scope.adminActiveScopeGroupIds.includes(gid)
+      }))
+    : [];
 
-  const directRoles = userRoleIds.map((rid) => ({
-    id: rid,
-    name: rolesMap.get(rid) || `Role ${rid}`
-  }));
+  const directRoles = canViewRoles
+    ? userRoleIds.map((rid) => ({
+        id: rid,
+        name: rolesMap.get(rid) || `Role ${rid}`
+      }))
+    : [];
 
   return {
     id: uid,

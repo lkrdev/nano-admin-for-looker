@@ -1202,3 +1202,145 @@ test('user-management: create_user duplicate check rejects wildcards, ignores _ 
   // Assert all_users was only called once by scope resolution, never by assertUserDoesNotExist
   assert.equal(allUsersCalls, 1);
 });
+
+test('user-management: update_user_profile and set_user_disabled request fields=id and strip sensitive user metadata', async () => {
+  const capturedFields: Array<{ op: string; fields?: string }> = [];
+  const sensitiveUser = {
+    id: '200',
+    first_name: 'Bob',
+    last_name: 'Builder',
+    email: 'bob@example.com',
+    sessions: [{ id: 'sess-1' }],
+    credentials_api3: [{ client_id: 'secret-client' }],
+    group_ids: ['10', '999'],
+    role_ids: ['1', '2'],
+    access_filters: [{ model_name: 'secret', field: 'tenant', value: 'acme' }]
+  };
+
+  const sdk = buildMockLookerSdk({
+    update_user: async (_id: string, _body: any, fields?: string) => {
+      capturedFields.push({ op: 'update_user', fields });
+      return sensitiveUser;
+    },
+    user: async (_id: string, fields?: string) => {
+      capturedFields.push({ op: 'user', fields });
+      return sensitiveUser;
+    },
+    update_user_credentials_email: async () => ({})
+  });
+
+  const ctx = makeContext(
+    sdk,
+    {
+      profile: {
+        allow_update_name: true,
+        allow_update_email: true,
+        allow_disable: true
+      }
+    },
+    '100'
+  );
+
+  const updateRes = await handler(ctx, 'update_user_profile', {
+    user_id: '200',
+    first_name: 'Bobby'
+  });
+  assert.deepEqual(updateRes.user, { id: '200' });
+
+  const emailOnlyUpdateRes = await handler(ctx, 'update_user_profile', {
+    user_id: '200',
+    email: 'bobby@example.com'
+  });
+  assert.deepEqual(emailOnlyUpdateRes.user, { id: '200' });
+
+  const disableRes = await handler(ctx, 'set_user_disabled', {
+    user_id: '200',
+    is_disabled: true
+  });
+  assert.deepEqual(disableRes.user, { id: '200' });
+
+  // Scope resolution calls sdk.user with 'id,group_ids' / 'id,role_ids,group_ids';
+  // the action mutations/fetches themselves must request only 'id' (never undefined/unfiltered).
+  assert.equal(
+    capturedFields.filter((c) => !c.fields).length,
+    0
+  );
+  assert.deepEqual(
+    capturedFields.filter((c) => c.op === 'update_user' || c.fields === 'id'),
+    [
+      { op: 'update_user', fields: 'id' },
+      { op: 'user', fields: 'id' },
+      { op: 'update_user', fields: 'id' }
+    ]
+  );
+});
+
+test('user-management: list_users respects groups.allow_view and roles.allow_view and filters out external group_ids', async () => {
+  const capturedAllRolesFields: Array<string | undefined> = [];
+  let capturedAllUsersFields: string | undefined;
+
+  const sdk = buildMockLookerSdk({
+    all_users: async (params: any) => {
+      capturedAllUsersFields = params?.fields;
+      return [
+        {
+          id: '200',
+          first_name: 'Bob',
+          last_name: 'Builder',
+          email: 'bob@example.com',
+          is_disabled: false,
+          group_ids: ['10', '999'],
+          role_ids: ['5', '6']
+        }
+      ];
+    },
+    all_roles: async (params: any) => {
+      capturedAllRolesFields.push(params?.fields);
+      return [
+        { id: '5', name: 'Developer' },
+        { id: '6', name: 'Viewer' }
+      ];
+    }
+  });
+
+  // 1. Both groups.allow_view and roles.allow_view disabled
+  const hiddenCtx = makeContext(
+    sdk,
+    {
+      profile: { allow_create: false },
+      groups: { allow_view: false },
+      roles: { allow_view: false }
+    },
+    '100'
+  );
+
+  const hiddenRes = await handler(hiddenCtx, 'list_users', {});
+  assert.equal(
+    capturedAllRolesFields.filter((f) => f === 'id,name').length,
+    0
+  );
+  assert.ok(capturedAllUsersFields && !capturedAllUsersFields.includes('role_ids'));
+  assert.equal(hiddenRes.users.length, 1);
+  assert.deepEqual(hiddenRes.users[0].group_ids, []);
+  assert.deepEqual(hiddenRes.users[0].shared_scope_group_ids, []);
+  assert.deepEqual(hiddenRes.users[0].manageable_groups, []);
+  assert.deepEqual(hiddenRes.users[0].role_ids, []);
+  assert.deepEqual(hiddenRes.users[0].direct_roles, []);
+  assert.deepEqual(hiddenRes.scope_info.manageable_groups, []);
+  assert.deepEqual(hiddenRes.scope_info.active_scope_groups, []);
+
+  // 2. groups.allow_view enabled: external group '999' is still excluded from group_ids
+  const groupViewCtx = makeContext(
+    sdk,
+    {
+      groups: { allow_view: true },
+      roles: { allow_view: false }
+    },
+    '100'
+  );
+  const groupViewRes = await handler(groupViewCtx, 'list_users', {});
+  assert.deepEqual(groupViewRes.users[0].group_ids, ['10']);
+  assert.deepEqual(groupViewRes.users[0].role_ids, []);
+  assert.deepEqual(groupViewRes.users[0].direct_roles, []);
+  assert.equal(groupViewRes.scope_info.manageable_groups[0]?.role_ids, undefined);
+});
