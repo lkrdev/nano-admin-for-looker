@@ -1409,3 +1409,64 @@ test('user-management: get_user_detail requests minimal fields and enforces allo
   assert.equal(allowedRes.user.personal_folder_id, '123');
   assert.equal(allowedRes.user.home_folder_id, '456');
 });
+
+test('user-management: update_user_schedule and reassign_user_schedule request summary fields and strip destinations and query definitions', async () => {
+  const capturedUpdateFields: Array<string | undefined> = [];
+  const sensitivePlan = {
+    id: '555',
+    name: 'Weekly Export',
+    enabled: false,
+    crontab: '0 8 * * 1',
+    datagroup: '',
+    dashboard_id: '42',
+    look_id: null,
+    next_run_at: null,
+    last_run_at: null,
+    user_id: '200',
+    scheduled_plan_destination: [
+      { type: 'slack', address: 'https://hooks.slack.com/services/SECRET/TOKEN' }
+    ],
+    filters_string: '?region=EMEA',
+    query: { model: 'finance', view: 'revenue', filters: { secret: '1' } }
+  };
+
+  const sdk = buildMockLookerSdk({
+    scheduled_plan: async (id: string) => ({
+      id,
+      user_id: '200',
+      dashboard_id: '42'
+    }),
+    update_scheduled_plan: async (_id: string, body: any, fields?: string) => {
+      capturedUpdateFields.push(fields);
+      return {
+        ...sensitivePlan,
+        ...body
+      };
+    }
+  });
+
+  const ctx = makeContext(sdk, { telemetry: { allow_manage_schedules: true } }, '100');
+
+  const disableRes = await handler(ctx, 'update_user_schedule', {
+    user_id: '200',
+    scheduled_plan_id: '555',
+    enabled: false
+  });
+  assert.equal(disableRes.scheduled_plan.id, '555');
+  assert.equal(disableRes.scheduled_plan.scheduled_plan_destination, undefined);
+  assert.equal(disableRes.scheduled_plan.filters_string, undefined);
+  assert.equal(disableRes.scheduled_plan.query, undefined);
+
+  const reassignRes = await handler(ctx, 'reassign_user_schedule', {
+    user_id: '200',
+    new_owner_user_id: '100',
+    scheduled_plan_id: '555'
+  });
+  assert.equal(reassignRes.scheduled_plan.user_id, '100');
+  assert.equal(reassignRes.scheduled_plan.scheduled_plan_destination, undefined);
+  assert.equal(reassignRes.scheduled_plan.filters_string, undefined);
+  assert.equal(reassignRes.scheduled_plan.query, undefined);
+
+  assert.equal(capturedUpdateFields.length, 2);
+  assert.ok(capturedUpdateFields.every((f) => typeof f === 'string' && f.includes('id')));
+});

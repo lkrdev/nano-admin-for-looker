@@ -98,7 +98,7 @@ export async function updateUserScheduleAction(
   }
 
   const updated = await context.sdk.ok(
-    context.sdk.update_scheduled_plan(planId, { enabled: false })
+    context.sdk.update_scheduled_plan(planId, { enabled: false }, SCHEDULE_SUMMARY_FIELDS)
   );
 
   return {
@@ -106,7 +106,7 @@ export async function updateUserScheduleAction(
     user_id: targetUserId,
     scheduled_plan_id: planId,
     enabled: false,
-    scheduled_plan: updated,
+    scheduled_plan: sanitizeScheduledPlanSummary(updated, targetUserId),
     message: `Scheduled plan ${planId} has been disabled.`
   };
 }
@@ -151,7 +151,11 @@ export async function reassignUserScheduleAction(
 
   // Always disable the schedule on reassignment so the new owner must review and re-enable it in Looker
   const updated = await context.sdk.ok(
-    context.sdk.update_scheduled_plan(planId, { user_id: newOwnerUserId, enabled: false })
+    context.sdk.update_scheduled_plan(
+      planId,
+      { user_id: newOwnerUserId, enabled: false },
+      SCHEDULE_SUMMARY_FIELDS
+    )
   );
 
   const reviewUrl = buildScheduleReviewUrl(existingPlan || updated, context.instanceHost);
@@ -163,7 +167,7 @@ export async function reassignUserScheduleAction(
     scheduled_plan_id: planId,
     enabled: false,
     review_url: reviewUrl,
-    scheduled_plan: updated,
+    scheduled_plan: sanitizeScheduledPlanSummary(updated, newOwnerUserId),
     message: reviewUrl
       ? `Reassigned scheduled plan ${planId} from user ${targetUserId} to user ${newOwnerUserId} and set it to inactive. The new owner can review and re-enable it at: ${reviewUrl}`
       : `Reassigned scheduled plan ${planId} from user ${targetUserId} to user ${newOwnerUserId} and set it to inactive for owner review.`
@@ -172,13 +176,35 @@ export async function reassignUserScheduleAction(
 
 // --- Hoisted Pure Helpers ---
 
+const SCHEDULE_SUMMARY_FIELDS =
+  'id,name,title,enabled,crontab,datagroup,dashboard_id,look_id,next_run_at,last_run_at,user_id';
+
+function sanitizeScheduledPlanSummary(p: any, fallbackUserId: string): any {
+  return {
+    id: String(p?.id ?? ''),
+    name: p?.name || p?.title || `Schedule ${p?.id ?? ''}`,
+    enabled: p?.enabled !== false,
+    crontab: p?.crontab || '',
+    datagroup: p?.datagroup || '',
+    dashboard_id: p?.dashboard_id ? String(p.dashboard_id) : null,
+    look_id: p?.look_id ? String(p.look_id) : null,
+    next_run_at: p?.next_run_at || null,
+    last_run_at: p?.last_run_at || null,
+    user_id: String(p?.user_id ?? p?.user?.id ?? fallbackUserId)
+  };
+}
+
 async function fetchSchedulesForUser(sdk: any, userId: string): Promise<any[]> {
   let rawPlans: any[] = [];
   try {
     if (typeof sdk.scheduled_plans_for_user === 'function') {
-      rawPlans = await sdk.ok(sdk.scheduled_plans_for_user({ user_id: userId }));
+      rawPlans = await sdk.ok(
+        sdk.scheduled_plans_for_user({ user_id: userId, fields: SCHEDULE_SUMMARY_FIELDS })
+      );
     } else if (typeof sdk.all_scheduled_plans === 'function') {
-      rawPlans = await sdk.ok(sdk.all_scheduled_plans({ user_id: userId }));
+      rawPlans = await sdk.ok(
+        sdk.all_scheduled_plans({ user_id: userId, fields: SCHEDULE_SUMMARY_FIELDS })
+      );
     }
   } catch (err) {
     rawPlans = [];
@@ -186,18 +212,7 @@ async function fetchSchedulesForUser(sdk: any, userId: string): Promise<any[]> {
 
   return (rawPlans || [])
     .filter((p: any) => String(p.user_id ?? p.user?.id ?? userId) === userId)
-    .map((p: any) => ({
-      id: String(p.id),
-      name: p.name || p.title || `Schedule ${p.id}`,
-      enabled: p.enabled !== false,
-      crontab: p.crontab || '',
-      datagroup: p.datagroup || '',
-      dashboard_id: p.dashboard_id ? String(p.dashboard_id) : null,
-      look_id: p.look_id ? String(p.look_id) : null,
-      next_run_at: p.next_run_at || null,
-      last_run_at: p.last_run_at || null,
-      user_id: String(p.user_id ?? p.user?.id ?? userId)
-    }));
+    .map((p: any) => sanitizeScheduledPlanSummary(p, userId));
 }
 
 function buildScheduleReviewUrl(plan: any, instanceHost?: string): string | null {
@@ -215,7 +230,7 @@ async function verifyScheduleBelongsToUser(
   expectedUserId: string
 ): Promise<any> {
   if (typeof sdk.scheduled_plan === 'function') {
-    const plan = await sdk.ok(sdk.scheduled_plan(planId));
+    const plan = await sdk.ok(sdk.scheduled_plan(planId, 'id,user_id,dashboard_id,look_id'));
     const ownerId = String(plan?.user_id ?? plan?.user?.id ?? '').trim();
     if (!ownerId || ownerId !== expectedUserId) {
       throw new Error(
