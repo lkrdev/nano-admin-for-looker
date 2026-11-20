@@ -1,4 +1,4 @@
-import { isRoleAdmin } from '../../../auth_utils';
+import { getPrivilegedUserIds, isRoleAdmin } from '../../../auth_utils';
 import {
   DEFAULT_GROUP_OWNERS_ATTRIBUTE,
   GroupOwnershipRecord,
@@ -207,12 +207,7 @@ export async function inspectPrivilegedScopeGroupMembers(
     try {
       const allRoles = await sdk.ok(sdk.all_roles({}));
       for (const r of allRoles || []) {
-        const isAdminRole =
-          r.name === 'Admin' ||
-          r.permission_set?.all_access === true ||
-          r.permission_set?.unlimited === true ||
-          (Array.isArray(r.permission_set?.permissions) && r.permission_set.permissions.includes('administer'));
-        if (isAdminRole && r.id !== undefined && r.id !== null) {
+        if (isRoleAdmin(r) && r.id !== undefined && r.id !== null) {
           adminRoleIds.add(String(r.id));
         }
       }
@@ -221,17 +216,30 @@ export async function inspectPrivilegedScopeGroupMembers(
     }
   }
 
+  let sdkPrivilegedIds = new Set<string>();
+  if (typeof sdk.all_users === 'function' && typeof sdk.all_roles === 'function') {
+    try {
+      sdkPrivilegedIds = await getPrivilegedUserIds(sdk);
+    } catch (err) {
+      // Fallback to usersMap + adminRoleIds if full SDK lookup fails during audit
+    }
+  }
+
   const privilegedScopeMembers: PrivilegedScopeMemberWarning[] = [];
 
   for (const sg of activeScopeGroupsWithUsers) {
     for (const member of sg.users || []) {
-      const fullUser = usersMap.get(String(member.id)) || {};
+      const uid = String(member.id);
+      const fullUser = usersMap.get(uid) || {};
       const isServiceAccount = Boolean(fullUser.is_service_account);
 
       const userRoleIds: string[] = Array.isArray(fullUser.role_ids)
         ? fullUser.role_ids.map((id: any) => String(id))
         : [];
-      const isAdmin = userRoleIds.some((rid) => adminRoleIds.has(rid)) || Boolean(fullUser.is_admin);
+      const isAdmin =
+        userRoleIds.some((rid) => adminRoleIds.has(rid)) ||
+        Boolean(fullUser.is_admin) ||
+        (!isServiceAccount && sdkPrivilegedIds.has(uid));
 
       if (isAdmin || isServiceAccount) {
         privilegedScopeMembers.push({
