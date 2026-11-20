@@ -129,12 +129,11 @@ export async function createEmailCredentialsAction(
   }
 
   if (
-    existingEmail &&
-    existingEmail.toLowerCase() !== requestedEmail.toLowerCase() &&
-    !params.profile.allow_update_email
+    !params.profile.allow_update_email &&
+    (!existingEmail || existingEmail.toLowerCase() !== requestedEmail.toLowerCase())
   ) {
     throw new Error(
-      '403 Forbidden: Changing an existing user\'s email address is not permitted for this workflow.'
+      '403 Forbidden: Setting or changing a user\'s email address is not permitted when allow_update_email is disabled.'
     );
   }
 
@@ -158,6 +157,11 @@ export async function deleteEmailCredentialsAction(
 ): Promise<any> {
   if (!params.credentials.allow_email_credentials) {
     throw new Error('403 Forbidden: Managing email credentials is not permitted for this workflow.');
+  }
+  if (!params.profile.allow_update_email) {
+    throw new Error(
+      '403 Forbidden: Deleting email credentials is not permitted when allow_update_email is disabled.'
+    );
   }
 
   const targetUserId = String(payload?.user_id || '').trim();

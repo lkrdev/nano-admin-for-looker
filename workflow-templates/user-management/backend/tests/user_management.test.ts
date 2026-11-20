@@ -1021,3 +1021,56 @@ test('user-management: resolveManageableGroupHierarchy & add_user_to_group block
     /403 Forbidden: Group "10" is not a member of the invoking admin's Scope Group hierarchy/i
   );
 });
+
+test('user-management: create_email_credentials & delete_email_credentials enforce allow_update_email', async () => {
+  const sdk = buildMockLookerSdk({
+    user: async (id: string) => {
+      if (String(id) === '200') {
+        return { id: '200', email: '', group_ids: ['10'] };
+      }
+      return { id: String(id), email: 'existing@example.com', group_ids: ['10'] };
+    },
+    create_user_credentials_email: async () => ({}),
+    delete_user_credentials_email: async () => ({})
+  });
+
+  // Default profile.allow_update_email is false even when allow_email_credentials is true
+  const ctx = makeContext(
+    sdk,
+    {
+      credentials: { allow_email_credentials: true }
+    },
+    '100'
+  );
+
+  // Blocked: attaching an email to an email-less user ('200') when allow_update_email is false
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'create_email_credentials', {
+        user_id: '200',
+        email: 'attacker@evil.com'
+      }),
+    /403 Forbidden: Setting or changing a user's email address is not permitted/i
+  );
+
+  // Blocked: deleting email credentials when allow_update_email is false
+  await assert.rejects(
+    async () => await handler(ctx, 'delete_email_credentials', { user_id: '100' }),
+    /403 Forbidden: Deleting email credentials is not permitted/i
+  );
+
+  // Allowed: when profile.allow_update_email is true
+  const allowCtx = makeContext(
+    sdk,
+    {
+      profile: { allow_update_email: true },
+      credentials: { allow_email_credentials: true }
+    },
+    '100'
+  );
+  const res = await handler(allowCtx, 'create_email_credentials', {
+    user_id: '200',
+    email: 'valid@example.com'
+  });
+  assert.equal(res.success, true);
+});
