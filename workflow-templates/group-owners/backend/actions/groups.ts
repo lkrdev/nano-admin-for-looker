@@ -106,6 +106,7 @@ export async function getOwnedGroupDetailsAction(
     }))
     .filter(
       (g: any) =>
+        ownedContext.allManageableGroupIdsSet.has(g.id) &&
         g.id !== groupId &&
         !currentSubgroupIds.has(g.id) &&
         !ancestorIds.has(g.id) &&
@@ -135,10 +136,12 @@ export async function getOwnedGroupDetailsAction(
     })),
     eligible_users: eligibleUsers,
     addable_users: addableUsers,
-    all_groups: (allGroups || []).map((g: any) => ({
-      id: String(g.id),
-      name: g.name || `Group ${g.id}`
-    })),
+    all_groups: (allGroups || [])
+      .filter((g: any) => ownedContext.allManageableGroupIdsSet.has(String(g.id)))
+      .map((g: any) => ({
+        id: String(g.id),
+        name: g.name || `Group ${g.id}`
+      })),
     addable_child_groups: addableChildGroups,
     capabilities: params
   };
@@ -219,8 +222,24 @@ export async function updateOwnedGroupOwnerAction(
 
   assertGroupIsManageable(groupId, ownedContext);
 
-  if (operation === 'add' && ownerType === 'user') {
+  if (ownerType === 'user') {
     assertUserAllowedByLimitation(ownerId, ownedContext);
+  } else {
+    assertGroupIsManageable(ownerId, ownedContext);
+    if (operation === 'add' && ownedContext.limitation.active && typeof context.sdk.all_group_users === 'function') {
+      const targetMembers = await context.sdk.ok(
+        context.sdk.all_group_users({ group_id: ownerId, fields: 'id' })
+      );
+      const allowedSet = new Set<string>(ownedContext.limitation.userIds.map((id) => String(id)));
+      for (const m of targetMembers || []) {
+        const mid = String(m?.id || '').trim();
+        if (mid && !allowedSet.has(mid)) {
+          throw new Error(
+            `403 Forbidden: Group "${ownerId}" contains user "${mid}" outside the allowed user_id_limitation (${ownedContext.limitation.mode}).`
+          );
+        }
+      }
+    }
   }
 
   const res = await mutateGroupOwnerSpecifier(

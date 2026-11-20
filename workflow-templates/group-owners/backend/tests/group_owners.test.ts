@@ -370,7 +370,49 @@ test('group-owners: update_group_owner adds/removes owners and blocks privileged
         owner_id: '30,u:999',
         operation: 'add'
       }),
-    /owner_id contains invalid characters/i
+    /403 Forbidden: Group "30,u:999" is not in the invoking user's owned group hierarchy/i
+  );
+
+  // 5. Adding an unowned group ('30') as group owner is rejected
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'update_group_owner', {
+        group_id: '20',
+        owner_type: 'group',
+        owner_id: '30',
+        operation: 'add'
+      }),
+    /403 Forbidden: Group "30" is not in the invoking user's owned group hierarchy/i
+  );
+
+  // 6. Adding an owned group ('21') that contains a privileged/out-of-scope user ('1') is rejected
+  const origAllGroupUsers = sdk.all_group_users;
+  sdk.all_group_users = async (p: any) => {
+    if (String(p?.group_id) === '21') return [{ id: '1' }, { id: '200' }];
+    return origAllGroupUsers(p);
+  };
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'update_group_owner', {
+        group_id: '20',
+        owner_type: 'group',
+        owner_id: '21',
+        operation: 'add'
+      }),
+    /403 Forbidden: Group "21" contains user "1" outside the allowed user_id_limitation/i
+  );
+  sdk.all_group_users = origAllGroupUsers;
+
+  // 7. Removing an out-of-scope/privileged user owner ('1') is rejected
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'update_group_owner', {
+        group_id: '20',
+        owner_type: 'user',
+        owner_id: '1',
+        operation: 'remove'
+      }),
+    /403 Forbidden: User "1" is outside the allowed user_id_limitation/i
   );
 
   // 4. Case-varied or invalid operation/owner_type cannot bypass limitation checks
