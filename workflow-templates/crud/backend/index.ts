@@ -256,13 +256,22 @@ export const handler = async (
 
     if (limitation.active && meta.userIdParamName) {
       const userKey = meta.userIdParamName;
+      if (userKey === 'id') {
+        throw new Error(
+          `403 Forbidden: Creating "${target}" is not permitted when user_id_limitation is active (mode: "${limitation.mode}").`
+        );
+      }
       if (createBody[userKey] !== undefined && createBody[userKey] !== null) {
         const specifiedOwner = String(createBody[userKey]);
         if (!limitation.userIds.includes(specifiedOwner)) {
           throw new Error(`403 Forbidden: Specified owner user_id "${specifiedOwner}" is outside allowed user scope`);
         }
       } else if (userKey === 'user_id') {
-        createBody.user_id = context.userId;
+        const invokingUserId = String(context.userId || '').trim();
+        if (!invokingUserId || !limitation.userIds.includes(invokingUserId)) {
+          throw new Error(`403 Forbidden: Invoking user "${invokingUserId}" is outside allowed user scope`);
+        }
+        createBody.user_id = invokingUserId;
       }
     }
 

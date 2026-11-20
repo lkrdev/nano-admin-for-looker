@@ -125,4 +125,40 @@ workflows:
     );
     assert.equal(userLookupCalls.length, 0);
   });
+
+  await t.test('blocks create on users when user_id_limitation is active and blocks omitted user_id when caller is out of scope', async () => {
+    const usersCreateCtx = createTestContext({
+      userId: '42',
+      parameters: {
+        target_object: 'users',
+        user_id_limitation: { mode: 'self' },
+        supported_operations: [{ name: 'create', fields: ['first_name', 'last_name'] }]
+      }
+    });
+
+    await assert.rejects(
+      async () => await handler(usersCreateCtx, 'create', { body: { first_name: 'Rogue', last_name: 'User' } }),
+      /403 Forbidden: Creating "users" is not permitted when user_id_limitation is active/
+    );
+
+    const outOfScopeCtx = createTestContext({
+      userId: '50',
+      parameters: {
+        target_object: 'scheduled_plans',
+        user_id_limitation: { mode: 'scope_groups' },
+        supported_operations: [{ name: 'create', fields: ['name', 'user_id'] }]
+      },
+      sdkOptions: {
+        userGroups: { '50': ['unrelated_group'] },
+        scopeGroups: { unrelated_group: [] },
+        groupAttributeValues: { attr_100: [] }
+      }
+    });
+    (outOfScopeCtx.sdk as any).create_scheduled_plan = async () => ({});
+
+    await assert.rejects(
+      async () => await handler(outOfScopeCtx, 'create', { body: { name: 'Exfil Plan', user_id: null } }),
+      /403 Forbidden: Invoking user "50" is outside allowed user scope/
+    );
+  });
 });
