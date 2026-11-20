@@ -239,53 +239,93 @@ export async function getScopeGroupUserIds(
 /**
  * Resolves the set of Looker User IDs that are privileged accounts:
  * - Service Accounts (is_service_account === true)
- * - Looker Admins (holding the 'Admin' role or a role with 'administer', 'all_access', or 'unlimited' permissions)
+ * - Looker Admins (holding the 'Admin' role or a role with 'administer', 'all_access', or 'unlimited' permissions,
+ *   either directly or inherited via Looker Group memberships)
+ *
+ * Fails closed (throws) if role or user lookups are unavailable or fail.
  */
 export async function getPrivilegedUserIds(sdk: any): Promise<Set<string>> {
+  if (typeof sdk?.all_roles !== 'function' || typeof sdk?.all_users !== 'function') {
+    throw new Error('Cannot resolve privileged users: Looker SDK all_roles or all_users is unavailable.');
+  }
+
   const privilegedIds = new Set<string>();
   const adminRoleIds = new Set<string>();
 
-  if (typeof sdk.all_roles === 'function') {
-    try {
-      const allRoles = await sdk.ok(sdk.all_roles({}));
-      for (const r of allRoles || []) {
-        const isAdminRole =
-          r.name === 'Admin' ||
-          r.permission_set?.all_access === true ||
-          r.permission_set?.unlimited === true ||
-          (Array.isArray(r.permission_set?.permissions) &&
-            r.permission_set.permissions.includes('administer'));
-        if (isAdminRole && r.id !== undefined && r.id !== null) {
-          adminRoleIds.add(String(r.id));
-        }
-      }
-    } catch (err) {
-      // Ignore role lookup failure
+  const allRoles = await sdk.ok(sdk.all_roles({}));
+  for (const r of allRoles || []) {
+    if (isRoleAdmin(r) && r.id !== undefined && r.id !== null) {
+      adminRoleIds.add(String(r.id));
     }
   }
 
-  if (typeof sdk.all_users === 'function') {
-    try {
-      const allUsers = await sdk.ok(
-        sdk.all_users({
-          fields: 'id,is_service_account,role_ids'
-        })
-      );
-      for (const u of allUsers || []) {
-        if (u.id === undefined || u.id === null) continue;
-        const uid = String(u.id);
-        const isServiceAccount = Boolean(u.is_service_account);
-        const userRoleIds: string[] = Array.isArray(u.role_ids)
-          ? u.role_ids.map((rid: any) => String(rid))
-          : [];
-        const isAdmin =
-          Boolean(u.is_admin) || userRoleIds.some((rid) => adminRoleIds.has(rid));
-        if (isServiceAccount || isAdmin) {
-          privilegedIds.add(uid);
+  // Collect all Looker groups that grant an Admin role (via role_groups and/or group hierarchy)
+  const adminGroupIds = new Set<string>();
+  if (typeof sdk.role_groups === 'function') {
+    for (const roleId of adminRoleIds) {
+      const roleGroups = await sdk.ok(sdk.role_groups(roleId, 'id'));
+      for (const g of roleGroups || []) {
+        if (g?.id !== undefined && g?.id !== null) {
+          adminGroupIds.add(String(g.id));
         }
       }
-    } catch (err) {
-      // Ignore user lookup failure
+    }
+  }
+
+  if (typeof sdk.search_groups_with_hierarchy === 'function') {
+    const hierarchyItems = await sdk.ok(sdk.search_groups_with_hierarchy({}));
+    const childrenByParentId = new Map<string, string[]>();
+    for (const item of hierarchyItems || []) {
+      const gid = String(item.id);
+      const itemRoleIds: string[] = Array.isArray(item.role_ids)
+        ? item.role_ids.map((rid: any) => String(rid))
+        : [];
+      if (itemRoleIds.some((rid) => adminRoleIds.has(rid))) {
+        adminGroupIds.add(gid);
+      }
+      const parentIds: string[] = Array.isArray(item.parent_group_ids)
+        ? item.parent_group_ids.map((pid: any) => String(pid))
+        : [];
+      for (const pid of parentIds) {
+        if (!childrenByParentId.has(pid)) childrenByParentId.set(pid, []);
+        childrenByParentId.get(pid)!.push(gid);
+      }
+    }
+
+    // Descendant child groups inherit their parent group's Admin roles in Looker
+    const queue = Array.from(adminGroupIds);
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      for (const childId of childrenByParentId.get(current) || []) {
+        if (!adminGroupIds.has(childId)) {
+          adminGroupIds.add(childId);
+          queue.push(childId);
+        }
+      }
+    }
+  }
+
+  const allUsers = await sdk.ok(
+    sdk.all_users({
+      fields: 'id,is_service_account,role_ids,group_ids'
+    })
+  );
+  for (const u of allUsers || []) {
+    if (u.id === undefined || u.id === null) continue;
+    const uid = String(u.id);
+    const isServiceAccount = Boolean(u.is_service_account);
+    const userRoleIds: string[] = Array.isArray(u.role_ids)
+      ? u.role_ids.map((rid: any) => String(rid))
+      : [];
+    const userGroupIds: string[] = Array.isArray(u.group_ids)
+      ? u.group_ids.map((gid: any) => String(gid))
+      : [];
+    const isAdmin =
+      Boolean(u.is_admin) ||
+      userRoleIds.some((rid) => adminRoleIds.has(rid)) ||
+      userGroupIds.some((gid) => adminGroupIds.has(gid));
+    if (isServiceAccount || isAdmin) {
+      privilegedIds.add(uid);
     }
   }
 

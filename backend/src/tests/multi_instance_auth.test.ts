@@ -2,7 +2,7 @@ process.env.GCF_HMAC_SECRET = process.env.GCF_HMAC_SECRET || 'test_secret_for_te
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveAuthorizedGroups, isUserAuthorized, clearWorkflowCache, setCachedWorkflows } from '../auth_utils';
+import { resolveAuthorizedGroups, isUserAuthorized, clearWorkflowCache, setCachedWorkflows, getPrivilegedUserIds } from '../auth_utils';
 import { isHostAllowed, authenticateRequest } from '../auth';
 import { getChallengeAttributeId, refreshChallenge, clearChallengeAttributeIdCache } from '../challenge';
 import { validateWorkflowsSchema } from '../actions/validate_dev_index';
@@ -743,5 +743,53 @@ test('workflow-groups-manager audit_warnings — detects role-bearing and Admin-
   assert.equal(warnings[0].subgroup_id, '12');
   assert.equal(warnings[0].has_admin_role, true);
   assert.deepEqual(warnings[0].roles, [{ id: 'r_admin', name: 'Admin', is_admin: true }]);
+});
+
+test('getPrivilegedUserIds — detects group-inherited Admin roles and fails closed on API errors', async () => {
+  const sdkWithGroupAdmin: any = {
+    ok: async (val: any) => await val,
+    all_roles: async () => [
+      { id: 'r_admin', name: 'Admin', permission_set: { all_access: true, permissions: ['administer'] } },
+      { id: 'r_viewer', name: 'Viewer', permission_set: { permissions: ['access_data'] } }
+    ],
+    role_groups: async (roleId: string) => {
+      if (roleId === 'r_admin') return [{ id: 'g_admins', name: 'Looker Admins' }];
+      return [];
+    },
+    search_groups_with_hierarchy: async () => [
+      { id: 'g_admins', name: 'Looker Admins', parent_group_ids: [], role_ids: ['r_admin'] },
+      { id: 'g_admins_sub', name: 'Looker Admins Sub', parent_group_ids: ['g_admins'], role_ids: [] },
+      { id: 'g_regular', name: 'Regular', parent_group_ids: [], role_ids: ['r_viewer'] }
+    ],
+    all_users: async () => [
+      { id: '1', is_service_account: false, role_ids: [], group_ids: ['g_admins'] },
+      { id: '2', is_service_account: false, role_ids: [], group_ids: ['g_admins_sub'] },
+      { id: '3', is_service_account: true, role_ids: [], group_ids: ['g_regular'] },
+      { id: '4', is_service_account: false, role_ids: ['r_viewer'], group_ids: ['g_regular'] }
+    ]
+  };
+
+  const privileged = await getPrivilegedUserIds(sdkWithGroupAdmin);
+  assert.equal(privileged.has('1'), true);
+  assert.equal(privileged.has('2'), true);
+  assert.equal(privileged.has('3'), true);
+  assert.equal(privileged.has('4'), false);
+
+  // Fail closed when all_roles or all_users throws
+  const failingRolesSdk: any = {
+    ...sdkWithGroupAdmin,
+    all_roles: async () => {
+      throw new Error('403 Forbidden: missing see_roles');
+    }
+  };
+  await assert.rejects(async () => await getPrivilegedUserIds(failingRolesSdk), /403 Forbidden/);
+
+  const failingUsersSdk: any = {
+    ...sdkWithGroupAdmin,
+    all_users: async () => {
+      throw new Error('429 Too Many Requests');
+    }
+  };
+  await assert.rejects(async () => await getPrivilegedUserIds(failingUsersSdk), /429 Too Many Requests/);
 });
 
