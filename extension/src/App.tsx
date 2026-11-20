@@ -745,7 +745,10 @@ export const App: React.FC<AppProps> = ({ extensionSDK }) => {
                               <div>
                                 <strong style={{ fontSize: '13px', color: '#0f172a' }}>{wf.label}</strong>
                                 <span style={{ fontSize: '11px', color: '#64748b', display: 'block' }}>
-                                  ID: <code>{wf.id}</code> | Template: <code>{wf.template}</code>
+                                  ID: <code>{wf.id}</code>
+                                  {wf.template ? (
+                                    <> | Template: <code>{wf.template}</code></>
+                                  ) : null}
                                 </span>
                               </div>
                               <span style={{ fontSize: '11px', background: '#e0f2fe', color: '#0369a1', padding: '2px 8px', borderRadius: '12px' }}>

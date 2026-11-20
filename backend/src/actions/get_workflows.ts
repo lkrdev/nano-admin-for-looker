@@ -18,10 +18,24 @@ export async function getWorkflowsHandler(sdk: LookerBackendSDK, userId: string,
     const manifest = getTemplateManifest(wf.template);
     const mountType = manifest.mount_type || wf.mount_type || 'page';
 
+    if (!authorized) {
+      return {
+        id: wf.id,
+        label: wf.label || wf.id,
+        description: wf.description || '',
+        mount_type: mountType,
+        authorized: false
+      };
+    }
+
     return {
-      ...wf,
+      id: wf.id,
+      label: wf.label || wf.id,
+      description: wf.description || '',
+      template: wf.template,
       mount_type: mountType,
-      authorized
+      parameters: wf.parameters || {},
+      authorized: true
     };
   });
 
