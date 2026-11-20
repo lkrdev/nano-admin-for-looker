@@ -52,6 +52,13 @@ export const handler = async (
   if (action === 'inspect_group') {
     const groupId = String(payload?.group_id || '').trim();
     const ownerAttr = String(payload?.ownership_attribute_name || defaultOwnerAttr).trim();
+    const { ownershipAttributes } = await resolveConfiguredAttributeAllowlists(
+      sdk,
+      defaultAttr,
+      defaultOwnerAttr,
+      context.instanceHost
+    );
+    await assertAuthorizedAttribute(sdk, ownerAttr, ownershipAttributes, 'Group Ownership');
     return await inspectSingleGroup(sdk, groupId, defaultAttr, ownerAttr);
   }
 
@@ -61,12 +68,26 @@ export const handler = async (
     const operation = String(payload?.operation || 'add').trim() as 'add' | 'remove';
     const ownerType = String(payload?.owner_type || 'user').trim() as 'user' | 'group';
     const ownerId = String(payload?.owner_id || '').trim();
+    const { ownershipAttributes } = await resolveConfiguredAttributeAllowlists(
+      sdk,
+      defaultAttr,
+      defaultOwnerAttr,
+      context.instanceHost
+    );
+    await assertAuthorizedAttribute(sdk, ownerAttr, ownershipAttributes, 'Group Ownership');
     return await mutateGroupOwnerSpecifier(sdk, groupId, ownerAttr, operation, ownerType, ownerId);
   }
 
   if (action === 'create_user_attribute') {
     const attrName = String(payload?.attribute_name || defaultAttr).trim();
     const label = String(payload?.label || 'Nano Admin Workflow Scope Group').trim();
+    const { scopeAttributes } = await resolveConfiguredAttributeAllowlists(
+      sdk,
+      defaultAttr,
+      defaultOwnerAttr,
+      context.instanceHost
+    );
+    await assertAuthorizedAttribute(sdk, attrName, scopeAttributes, 'Scope Group');
     return await createScopeUserAttribute(sdk, attrName, label);
   }
 
@@ -76,6 +97,13 @@ export const handler = async (
     const userIds = Array.isArray(payload?.user_ids)
       ? payload.user_ids.map((id: any) => String(id))
       : [];
+    const { scopeAttributes } = await resolveConfiguredAttributeAllowlists(
+      sdk,
+      defaultAttr,
+      defaultOwnerAttr,
+      context.instanceHost
+    );
+    await assertAuthorizedAttribute(sdk, attrName, scopeAttributes, 'Scope Group');
     return await createScopeGroup(sdk, groupName, attrName, userIds);
   }
 
@@ -83,12 +111,26 @@ export const handler = async (
     const groupId = String(payload?.group_id || '').trim();
     const attrName = String(payload?.attribute_name || defaultAttr).trim();
     const enable = Boolean(payload?.enable);
+    const { scopeAttributes } = await resolveConfiguredAttributeAllowlists(
+      sdk,
+      defaultAttr,
+      defaultOwnerAttr,
+      context.instanceHost
+    );
+    await assertAuthorizedAttribute(sdk, attrName, scopeAttributes, 'Scope Group');
     return await toggleGroupScopeAttribute(sdk, groupId, attrName, enable);
   }
 
   if (action === 'remove_user_attribute_override') {
     const userId = String(payload?.user_id || '').trim();
     const attributeId = String(payload?.attribute_id || '').trim();
+    const { scopeAttributes } = await resolveConfiguredAttributeAllowlists(
+      sdk,
+      defaultAttr,
+      defaultOwnerAttr,
+      context.instanceHost
+    );
+    await assertAuthorizedScopeAttributeById(sdk, attributeId, scopeAttributes);
     return await removeUserAttributeOverride(sdk, userId, attributeId);
   }
 
@@ -105,6 +147,116 @@ export const handler = async (
 };
 
 // --- Hoisted Pure Helpers ---
+
+const INTERNAL_BLOCKED_ATTRIBUTE_NAMES = new Set<string>([
+  'nano_admin_challenge',
+  'nano_admin_admin_extension_nano_admin_challenge'
+]);
+
+function isInternalBlockedAttribute(attrName: string, attrObj?: any): boolean {
+  const lower = attrName.trim().toLowerCase();
+  if (
+    INTERNAL_BLOCKED_ATTRIBUTE_NAMES.has(lower) ||
+    lower.endsWith('_nano_admin_challenge')
+  ) {
+    return true;
+  }
+  if (attrObj?.is_system) {
+    return true;
+  }
+  return false;
+}
+
+async function resolveConfiguredAttributeAllowlists(
+  sdk: any,
+  defaultAttributeName: string,
+  defaultOwnershipAttributeName: string,
+  instanceHost?: string
+): Promise<{ scopeAttributes: Set<string>; ownershipAttributes: Set<string> }> {
+  const scopeAttributes = new Set<string>();
+  const ownershipAttributes = new Set<string>();
+
+  if (defaultAttributeName) scopeAttributes.add(defaultAttributeName.trim());
+  if (defaultOwnershipAttributeName) ownershipAttributes.add(defaultOwnershipAttributeName.trim());
+
+  let workflowsConfig: any = { workflows: [] };
+  try {
+    workflowsConfig = await getWorkflows(sdk, instanceHost);
+  } catch (err) {
+    // Fallback to defaults if index.md fetch fails
+  }
+
+  const workflows: any[] = Array.isArray(workflowsConfig?.workflows)
+    ? workflowsConfig.workflows
+    : [];
+
+  for (const wf of workflows) {
+    if (wf.template === 'group-owners' && wf.parameters?.ownership_attribute_name) {
+      ownershipAttributes.add(String(wf.parameters.ownership_attribute_name).trim());
+    }
+    const limitationAttr = wf.parameters?.user_id_limitation?.attribute_name;
+    if (limitationAttr && typeof limitationAttr === 'string' && limitationAttr.trim()) {
+      scopeAttributes.add(limitationAttr.trim());
+    }
+  }
+
+  return { scopeAttributes, ownershipAttributes };
+}
+
+async function assertAuthorizedAttribute(
+  sdk: any,
+  attributeName: string,
+  allowlist: Set<string>,
+  kindLabel: string
+): Promise<void> {
+  const cleanName = String(attributeName || '').trim();
+  if (!cleanName) {
+    throw { status: 400, message: `${kindLabel} attribute name is required.` };
+  }
+  if (isInternalBlockedAttribute(cleanName)) {
+    throw { status: 403, message: `403 Forbidden: Attribute "${cleanName}" is system-protected.` };
+  }
+  if (!allowlist.has(cleanName)) {
+    throw {
+      status: 403,
+      message: `403 Forbidden: Attribute "${cleanName}" is not an authorized ${kindLabel} attribute in index.md.`
+    };
+  }
+
+  const allAttrs = await sdk.ok(sdk.all_user_attributes({}));
+  const existing = (allAttrs || []).find((a: any) => a.name === cleanName);
+  if (existing && isInternalBlockedAttribute(cleanName, existing)) {
+    throw { status: 403, message: `403 Forbidden: Attribute "${cleanName}" is system-protected.` };
+  }
+}
+
+async function assertAuthorizedScopeAttributeById(
+  sdk: any,
+  attributeId: string,
+  scopeAllowlist: Set<string>
+): Promise<void> {
+  const cleanId = String(attributeId || '').trim();
+  if (!cleanId) {
+    throw { status: 400, message: 'attribute_id is required.' };
+  }
+
+  const allAttrs = await sdk.ok(sdk.all_user_attributes({}));
+  const attrObj = (allAttrs || []).find((a: any) => String(a.id) === cleanId);
+  if (!attrObj) {
+    throw { status: 404, message: `User attribute ID "${cleanId}" not found in Looker.` };
+  }
+
+  const attrName = String(attrObj.name || '').trim();
+  if (isInternalBlockedAttribute(attrName, attrObj)) {
+    throw { status: 403, message: `403 Forbidden: Attribute "${attrName}" is system-protected.` };
+  }
+  if (!scopeAllowlist.has(attrName)) {
+    throw {
+      status: 403,
+      message: `403 Forbidden: Attribute "${attrName}" is not an authorized Scope Group attribute in index.md.`
+    };
+  }
+}
 
 async function executeGroupsAudit(
   sdk: any,

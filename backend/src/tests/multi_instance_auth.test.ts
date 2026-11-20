@@ -611,3 +611,98 @@ test('workflow-groups-manager handler — supports dev index_content override, i
   assert.equal(updateOwnersRes.raw_value, 'u:100,g:20');
 });
 
+test('workflow-groups-manager handler — enforces index.md allowlist and internal blocklist on attribute mutations', async () => {
+  clearWorkflowCache();
+  setCachedWorkflows('dev.looker.app', {
+    workflows: [
+      {
+        id: 'um-custom',
+        template: 'user-management',
+        parameters: {
+          user_id_limitation: { mode: 'scope_groups', attribute_name: 'custom_scope_attr' }
+        }
+      }
+    ]
+  });
+
+  const deletedOverrides: string[] = [];
+  const toggledGroupAttrs: string[] = [];
+  const mockSdk: any = {
+    ok: async (val: any) => await val,
+    all_user_attributes: async () => [
+      { id: 'attr_scope', name: 'nano_admin_is_workflow_scope_group', is_system: false },
+      { id: 'attr_custom_scope', name: 'custom_scope_attr', is_system: false },
+      { id: 'attr_owners', name: 'nano_admin_group_owners', is_system: false },
+      { id: 'attr_rls', name: 'tenant_access_filter', is_system: false },
+      { id: 'attr_challenge', name: 'nano_admin_challenge', is_system: false },
+      { id: 'attr_system', name: 'looker_internal_sys', is_system: true }
+    ],
+    update_user_attribute_group_value: async (groupId: string, attrId: string, body: { value: string }) => {
+      toggledGroupAttrs.push(`${groupId}:${attrId}:${body.value}`);
+      return body;
+    },
+    delete_user_attribute_group_value: async (groupId: string, attrId: string) => {
+      toggledGroupAttrs.push(`${groupId}:${attrId}:deleted`);
+      return {};
+    },
+    delete_user_attribute_user_value: async (userId: string, attrId: string) => {
+      deletedOverrides.push(`${userId}:${attrId}`);
+      return {};
+    }
+  };
+
+  const ctx: any = {
+    sdk: mockSdk,
+    userId: '100',
+    workflowId: 'wgm',
+    parameters: {},
+    instanceHost: 'dev.looker.app'
+  };
+
+  // Blocked: arbitrary access_filter or challenge attribute in toggle_group_scope
+  await assert.rejects(
+    async () => await wgmHandler(ctx, 'toggle_group_scope', { group_id: '10', attribute_name: 'tenant_access_filter', enable: false }),
+    (err: any) => err?.status === 403
+  );
+  await assert.rejects(
+    async () => await wgmHandler(ctx, 'toggle_group_scope', { group_id: '10', attribute_name: 'nano_admin_challenge', enable: false }),
+    (err: any) => err?.status === 403
+  );
+
+  // Blocked: remove_user_attribute_override targeting access_filter, challenge, or system attribute
+  await assert.rejects(
+    async () => await wgmHandler(ctx, 'remove_user_attribute_override', { user_id: '5', attribute_id: 'attr_rls' }),
+    (err: any) => err?.status === 403
+  );
+  await assert.rejects(
+    async () => await wgmHandler(ctx, 'remove_user_attribute_override', { user_id: '5', attribute_id: 'attr_challenge' }),
+    (err: any) => err?.status === 403
+  );
+  await assert.rejects(
+    async () => await wgmHandler(ctx, 'remove_user_attribute_override', { user_id: '5', attribute_id: 'attr_system' }),
+    (err: any) => err?.status === 403
+  );
+
+  // Blocked: update_group_owners / create_user_attribute / create_scope_group with unconfigured attribute
+  await assert.rejects(
+    async () => await wgmHandler(ctx, 'update_group_owners', { group_id: '10', ownership_attribute_name: 'tenant_access_filter', owner_id: '20', operation: 'add' }),
+    (err: any) => err?.status === 403
+  );
+  await assert.rejects(
+    async () => await wgmHandler(ctx, 'create_user_attribute', { attribute_name: 'tenant_access_filter' }),
+    (err: any) => err?.status === 403
+  );
+  await assert.rejects(
+    async () => await wgmHandler(ctx, 'create_scope_group', { group_name: 'Test', attribute_name: 'tenant_access_filter' }),
+    (err: any) => err?.status === 403
+  );
+
+  // Allowed: default scope attribute and index.md-configured scope attribute
+  await wgmHandler(ctx, 'toggle_group_scope', { group_id: '10', attribute_name: 'custom_scope_attr', enable: true });
+  await wgmHandler(ctx, 'remove_user_attribute_override', { user_id: '5', attribute_id: 'attr_scope' });
+  assert.deepEqual(toggledGroupAttrs, ['10:attr_custom_scope:yes']);
+  assert.deepEqual(deletedOverrides, ['5:attr_scope']);
+
+  clearWorkflowCache();
+});
+
