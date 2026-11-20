@@ -89,8 +89,9 @@ export const handler = async (
       };
     }
 
-    const queryFilters = buildEnforcedFilters(payload?.filters || {}, limitationRes, userIdField);
-    validatePerformancePresets(exploreConfig, payload?.fields || [], queryFilters, exploreMeta);
+    const userFilters = payload?.filters || {};
+    validatePerformancePresets(exploreConfig, payload?.fields || [], userFilters, exploreMeta);
+    const queryFilters = buildEnforcedFilters(userFilters, limitationRes, userIdField);
 
     const queryResults = await executeInlineQuery(
       context.sdk,
@@ -125,8 +126,9 @@ export const handler = async (
       };
     }
 
-    const queryFilters = buildEnforcedFilters(payload?.filters || {}, limitationRes, userIdField);
-    validatePerformancePresets(exploreConfig, payload?.fields || [], queryFilters, exploreMeta);
+    const userFilters = payload?.filters || {};
+    validatePerformancePresets(exploreConfig, payload?.fields || [], userFilters, exploreMeta);
+    const queryFilters = buildEnforcedFilters(userFilters, limitationRes, userIdField);
 
     const sqlData = await executeInlineQuery(
       context.sdk,
@@ -164,8 +166,9 @@ export const handler = async (
       };
     }
 
-    const queryFilters = buildEnforcedFilters(payload?.filters || {}, limitationRes, userIdField);
-    validatePerformancePresets(exploreConfig, payload?.fields || [], queryFilters, exploreMeta);
+    const userFilters = payload?.filters || {};
+    validatePerformancePresets(exploreConfig, payload?.fields || [], userFilters, exploreMeta);
+    const queryFilters = buildEnforcedFilters(userFilters, limitationRes, userIdField);
 
     const csvData = await executeInlineQuery(
       context.sdk,
@@ -349,10 +352,34 @@ function validatePerformancePresets(
   const requiredFields = getRequiredFilterFields(exploreConfig);
 
   if (requiredFields.length > 0) {
+    const dimensions: any[] = Array.isArray(exploreMeta?.fields?.dimensions)
+      ? exploreMeta.fields.dimensions
+      : [];
+    const dimGroupByName = new Map<string, string>();
+    for (const dim of dimensions) {
+      if (dim?.name && dim?.dimension_group) {
+        dimGroupByName.set(String(dim.name), String(dim.dimension_group));
+      }
+    }
+
     const hasRequiredFilter = Object.keys(filters).some(filterField => {
+      if (String(filters[filterField] ?? '').trim().length === 0) {
+        return false;
+      }
+
       return requiredFields.some(reqField => {
         if (filterField === reqField) return true;
-        // Accept dimension group siblings (e.g. history.created_date when history.created_time is specified)
+
+        // Prefer explore dimension_group metadata when available
+        const reqGroup = dimGroupByName.get(reqField);
+        if (reqGroup) {
+          const filterGroup = dimGroupByName.get(filterField);
+          const reqView = reqField.split('.')[0];
+          const filterView = filterField.split('.')[0];
+          return Boolean(filterGroup && filterGroup === reqGroup && filterView === reqView);
+        }
+
+        // Fallback to naming convention when dimension_group metadata is unavailable
         const parts = reqField.split('.');
         if (parts.length === 2) {
           const groupPrefix = `${parts[0]}.${parts[1].split('_')[0]}_`;
