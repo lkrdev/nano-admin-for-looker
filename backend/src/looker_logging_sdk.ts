@@ -41,9 +41,44 @@ export function initLookerBackendSDK(settings?: any, contextInfo?: SDKLoggingCon
   return wrapLookerSDKWithLogging(rawSdk, contextInfo);
 }
 
+const SENSITIVE_KEY_REGEX =
+  /(password|passwd|secret|token|private_key|certificate|passphrase|authorization|cookie|credential|api_key|hmac|signature)/i;
+
+function formatArgsSummary(propName: string, args: any[]): string {
+  const isUserAttrCall = propName.toLowerCase().includes('user_attribute');
+  try {
+    return JSON.stringify(args, (key, value) => {
+      if (key && SENSITIVE_KEY_REGEX.test(key)) {
+        return '[REDACTED]';
+      }
+      if (isUserAttrCall && key === 'value') {
+        return '[REDACTED]';
+      }
+      if (typeof value === 'string') {
+        if (/^(Bearer|Basic)\s+/i.test(value)) {
+          return '[REDACTED]';
+        }
+        if (value.length > 150) {
+          return value.substring(0, 150) + '...[truncated]';
+        }
+      }
+      return value;
+    });
+  } catch {
+    return '[Unserializable Args]';
+  }
+}
+
 function formatResultSummary(res: any): string {
   if (res === null || res === undefined) {
     return 'null';
+  }
+
+  if (typeof res === 'object' && !Array.isArray(res) && 'ok' in res && ('value' in res || 'error' in res)) {
+    const status = res.statusCode ?? res.status;
+    const statusTag = status !== undefined ? `status=${status} ` : '';
+    const inner = res.ok ? res.value : res.error;
+    return `[ok=${Boolean(res.ok)} ${statusTag}${formatResultSummary(inner)}]`;
   }
 
   if (Array.isArray(res)) {
@@ -51,15 +86,17 @@ function formatResultSummary(res: any): string {
   }
 
   if (typeof res === 'object') {
+    const status = res.statusCode ?? res.status;
+    const statusPrefix = status !== undefined ? `status=${status} ` : '';
     const idVal = res.id ?? res.name ?? res.user_id ?? res.group_id ?? res.role_id;
     if (idVal !== undefined && idVal !== null) {
-      return `[Object id: "${idVal}"]`;
+      return `[${statusPrefix}Object id: "${idVal}"]`;
     }
     if (Array.isArray(res.data)) {
-      return `[Object data: ${res.data.length} item(s)]`;
+      return `[${statusPrefix}Object data: ${res.data.length} item(s)]`;
     }
     const keys = Object.keys(res);
-    return `[Object keys: ${keys.slice(0, 5).join(', ')}${keys.length > 5 ? '...' : ''}]`;
+    return `[${statusPrefix}Object keys: ${keys.slice(0, 5).join(', ')}${keys.length > 5 ? '...' : ''}]`;
   }
 
   if (typeof res === 'string') {
@@ -122,17 +159,7 @@ export function wrapLookerSDKWithLogging(sdk: any, contextInfo?: SDKLoggingConte
           const contextTag = ctxParts.length > 0 ? `[${ctxParts.join(' ')}] ` : '';
           const tag = `[Looker SDK API] sdk.${propName}`;
 
-          let argsSummary = '';
-          try {
-            argsSummary = JSON.stringify(args, (key, value) => {
-              if (typeof value === 'string' && value.length > 150) {
-                return value.substring(0, 150) + '...[truncated]';
-              }
-              return value;
-            });
-          } catch {
-            argsSummary = '[Unserializable Args]';
-          }
+          const argsSummary = formatArgsSummary(propName, args);
 
           console.log(`${tag} CALL ${contextTag}Params: ${argsSummary}`);
 
@@ -141,7 +168,9 @@ export function wrapLookerSDKWithLogging(sdk: any, contextInfo?: SDKLoggingConte
             result = orig.apply(target, args);
           } catch (err: any) {
             const duration = Date.now() - start;
-            console.error(`${tag} ERROR (${duration}ms) ${contextTag}Error:`, err.message || err);
+            const status = err?.statusCode ?? err?.status;
+            const statusTag = status !== undefined ? `status=${status} ` : '';
+            console.error(`${tag} ERROR (${duration}ms) ${contextTag}${statusTag}Error:`, err.message || err);
             throw err;
           }
 
@@ -155,7 +184,9 @@ export function wrapLookerSDKWithLogging(sdk: any, contextInfo?: SDKLoggingConte
               })
               .catch((err: any) => {
                 const duration = Date.now() - start;
-                console.error(`${tag} ERROR (${duration}ms) ${contextTag}Error:`, err.message || err);
+                const status = err?.statusCode ?? err?.status;
+                const statusTag = status !== undefined ? `status=${status} ` : '';
+                console.error(`${tag} ERROR (${duration}ms) ${contextTag}${statusTag}Error:`, err.message || err);
                 throw err;
               });
           }
