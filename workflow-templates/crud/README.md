@@ -63,7 +63,7 @@ workflows:
     parameters:
       target_object: "users"
       user_id_limitation:
-        mode: "none"
+        mode: "none" # User-owned resources default to "self" when omitted
       supported_operations:
         - name: "list"
           fields: ["id", "display_name", "email", "is_disabled"]

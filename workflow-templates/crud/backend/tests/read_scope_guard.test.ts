@@ -1,8 +1,8 @@
 /**
  * Purpose / Goal:
  * Security assertion test for the crud workflow template.
- * Verifies that the read operation on target objects spies on sdk.user and throws a 403 Forbidden
- * exception if the target object's owner ID is outside the allowed scope user IDs.
+ * Verifies that the read operation on users rejects out-of-scope user IDs with 403 Forbidden
+ * before calling sdk.user, preventing user ID existence disclosure.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -36,6 +36,5 @@ test('crud — read operation out-of-scope 403 guard', async () => {
   );
 
   const readCalls = context.sdk.calls.filter((c: any) => c.method === 'user' && c.args[0] === '999');
-  assert.equal(readCalls.length, 1);
-  assert.equal(readCalls[0].args[0], '999');
+  assert.equal(readCalls.length, 0);
 });

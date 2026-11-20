@@ -27,8 +27,8 @@
             "scope_groups",
             "self"
           ],
-          "default": "exclude_privileged",
-          "description": "'exclude_privileged' (default) allows all users except Looker Admins and Service Accounts; 'none' allows all users; 'scope_groups_minus_privileged' restricts to active scope groups excluding Looker Admins and Service Accounts; 'scope_groups' restricts to active scope groups; 'self' restricts to the invoking user"
+          "default": "scope_groups_minus_privileged",
+          "description": "'scope_groups_minus_privileged' (default) restricts to active scope groups excluding Looker Admins and Service Accounts; 'exclude_privileged' allows all users except Looker Admins and Service Accounts; 'none' allows all users; 'scope_groups' restricts to active scope groups; 'self' restricts to the invoking user"
         },
         "attribute_name": {
           "type": "string",

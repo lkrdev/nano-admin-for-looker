@@ -284,9 +284,22 @@ test('group-owners: list_owned_groups resolves direct and inherited subgroup own
   assert.equal(resDirect.groups[0].subgroups.length, 0);
 });
 
-test('group-owners: get_group_details & user membership mutations enforce exclude_privileged by default', async () => {
+test('group-owners: default scope_groups_minus_privileged blocks cross-scope users when no Scope Groups are configured', async () => {
   const sdk = buildMockLookerSdk();
   const ctx = makeContext(sdk, {}, '100');
+
+  const detail = await handler(ctx, 'get_group_details', { group_id: '20' });
+  assert.deepEqual(detail.addable_users, []);
+
+  await assert.rejects(
+    async () => await handler(ctx, 'add_user_to_group', { group_id: '20', user_id: '300' }),
+    /403 Forbidden: User "300" is outside the allowed user_id_limitation \(scope_groups_minus_privileged\)/i
+  );
+});
+
+test('group-owners: get_group_details & user membership mutations enforce exclude_privileged when configured', async () => {
+  const sdk = buildMockLookerSdk();
+  const ctx = makeContext(sdk, { user_id_limitation: { mode: 'exclude_privileged' } }, '100');
 
   // 1. get_group_details succeeds for owned group '20' and excludes Super Admin ('1') & Service Bot ('2') from addable_users
   const detail = await handler(ctx, 'get_group_details', { group_id: '20' });
@@ -316,7 +329,7 @@ test('group-owners: get_group_details & user membership mutations enforce exclud
 
 test('group-owners: update_group_owner adds/removes owners and blocks privileged user owners', async () => {
   const sdk = buildMockLookerSdk();
-  const ctx = makeContext(sdk, {}, '100');
+  const ctx = makeContext(sdk, { user_id_limitation: { mode: 'exclude_privileged' } }, '100');
 
   // 1. Add user '300' as an owner of group '20'
   const addOwnerRes = await handler(ctx, 'update_group_owner', {

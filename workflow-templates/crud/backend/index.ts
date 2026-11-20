@@ -181,8 +181,8 @@ export const handler = async (
     throw new Error(`Unsupported target object: "${target}". Supported types are: ${Object.keys(TARGETS).join(', ')}`);
   }
 
-  // Resolve user_id limitation scope
-  const limitation = await resolveLimitation(context);
+  // Resolve user_id limitation scope (default to 'self' for user-owned resources)
+  const limitation = await resolveLimitation(context, Boolean(meta.userIdParamName));
 
   // Reject configuration if user_id_limitation is enabled on a global non-user-owned object
   if (limitation.active && !meta.userIdParamName) {
@@ -235,6 +235,9 @@ export const handler = async (
     if (!id) {
       throw new Error(`Object ID is required for operation "read" on target "${target}"`);
     }
+    if (limitation.active && target === 'users' && !limitation.userIds.includes(id)) {
+      throw new Error(`403 Forbidden: Target ${meta.singular} does not belong to an allowed user scope`);
+    }
     const item = await sdk.ok(sdkMethod.call(sdk, id, fields));
 
     if (limitation.active && meta.userIdParamName && item) {
@@ -272,6 +275,9 @@ export const handler = async (
     if (!id) {
       throw new Error(`Object ID is required for operation "update" on target "${target}"`);
     }
+    if (limitation.active && target === 'users' && !limitation.userIds.includes(id)) {
+      throw new Error(`403 Forbidden: Target ${meta.singular} does not belong to an allowed user scope`);
+    }
 
     if (limitation.active && meta.userIdParamName) {
       const readMethodName = meta.operations.read;
@@ -301,6 +307,9 @@ export const handler = async (
     const id = String(payload?.id || '').trim();
     if (!id) {
       throw new Error(`Object ID is required for operation "delete" on target "${target}"`);
+    }
+    if (limitation.active && target === 'users' && !limitation.userIds.includes(id)) {
+      throw new Error(`403 Forbidden: Target ${meta.singular} does not belong to an allowed user scope`);
     }
 
     if (limitation.active && meta.userIdParamName) {
@@ -396,9 +405,13 @@ function buildMutationBody(
   return result;
 }
 
-async function resolveLimitation(context: WorkflowContext): Promise<UserIdLimitationResult> {
+async function resolveLimitation(
+  context: WorkflowContext,
+  isUserOwnedResource: boolean
+): Promise<UserIdLimitationResult> {
   const userLimitationConfig = context.parameters?.user_id_limitation;
-  const defaultMode: UserIdLimitationMode = userLimitationConfig ? 'self' : 'none';
+  const defaultMode: UserIdLimitationMode =
+    userLimitationConfig || isUserOwnedResource ? 'self' : 'none';
   if (context.helpers?.resolveUserIdLimitation) {
     return await context.helpers.resolveUserIdLimitation(userLimitationConfig, defaultMode);
   }

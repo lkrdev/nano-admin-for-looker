@@ -64,4 +64,65 @@ workflows:
       /403 Forbidden: Target user does not belong to an allowed user scope/
     );
   });
+
+  await t.test('defaults omitted user_id_limitation to self for user-owned resources (even when defaultMode is honored)', async () => {
+    let capturedDefaultMode: string | undefined;
+    const context = createTestContext({
+      userId: '42',
+      parameters: {
+        target_object: 'users',
+        supported_operations: [{ name: 'read' }]
+      },
+      sdkOptions: {
+        users: {
+          '42': { id: '42', name: 'Current User' },
+          '999': { id: '999', name: 'Other User' }
+        }
+      }
+    });
+    const origHelper = (context as any).helpers.resolveUserIdLimitation;
+    (context as any).helpers.resolveUserIdLimitation = async (cfg: any, defaultMode: any) => {
+      capturedDefaultMode = defaultMode;
+      return origHelper(cfg, defaultMode);
+    };
+
+    await assert.rejects(
+      async () => await handler(context, 'read', { id: '999' }),
+      /403 Forbidden: Target user does not belong to an allowed user scope/
+    );
+    assert.equal(capturedDefaultMode, 'self');
+  });
+
+  await t.test('returns 403 before SDK lookup for non-existent user ID on users target', async () => {
+    const context = createTestContext({
+      userId: '42',
+      parameters: {
+        target_object: 'users',
+        supported_operations: [{ name: 'read' }, { name: 'update', fields: ['first_name'] }, { name: 'delete' }]
+      },
+      sdkOptions: {
+        users: {
+          '42': { id: '42', name: 'Current User' }
+        }
+      }
+    });
+
+    await assert.rejects(
+      async () => await handler(context, 'read', { id: 'does-not-exist' }),
+      /403 Forbidden: Target user does not belong to an allowed user scope/
+    );
+    await assert.rejects(
+      async () => await handler(context, 'update', { id: 'does-not-exist', body: { first_name: 'X' } }),
+      /403 Forbidden: Target user does not belong to an allowed user scope/
+    );
+    await assert.rejects(
+      async () => await handler(context, 'delete', { id: 'does-not-exist' }),
+      /403 Forbidden: Target user does not belong to an allowed user scope/
+    );
+
+    const userLookupCalls = context.sdk.calls.filter((c: any) =>
+      ['user', 'update_user', 'delete_user'].includes(c.method)
+    );
+    assert.equal(userLookupCalls.length, 0);
+  });
 });

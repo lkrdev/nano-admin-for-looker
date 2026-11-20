@@ -344,13 +344,16 @@ async function resolveLimitationForGroupOwners(
 ) {
   const limitationConfig = params.user_id_limitation;
   if (context.helpers?.resolveUserIdLimitation) {
-    return await context.helpers.resolveUserIdLimitation(limitationConfig, 'exclude_privileged');
+    return await context.helpers.resolveUserIdLimitation(
+      limitationConfig,
+      'scope_groups_minus_privileged'
+    );
   }
   return await resolveUserIdLimitation(
     context.sdk,
     context.userId,
     limitationConfig,
-    'exclude_privileged'
+    'scope_groups_minus_privileged'
   );
 }
 

@@ -42,7 +42,7 @@ export const GroupDetailModal: React.FC<GroupDetailModalProps> = ({
   const addableChildGroups = details?.addable_child_groups || [];
   const owners = details?.group?.owners || [];
   const capabilities = details?.capabilities?.memberships || {};
-  const limitationMode = details?.capabilities?.user_id_limitation?.mode || 'exclude_privileged';
+  const limitationMode = details?.capabilities?.user_id_limitation?.mode || 'scope_groups_minus_privileged';
 
   const filteredMembers = useMemo(filterCurrentMembers, [members, memberSearch]);
   const filteredAddableUsers = useMemo(filterCandidateUsers, [addableUsers, addUserSearch]);

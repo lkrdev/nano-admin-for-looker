@@ -66,7 +66,7 @@ export function normalizeGroupOwnersParameters(
     rawParams.include_subgroups !== undefined ? Boolean(rawParams.include_subgroups) : true;
 
   const rawLimitation = rawParams.user_id_limitation || {};
-  const rawMode = rawLimitation.mode || 'exclude_privileged';
+  const rawMode = rawLimitation.mode || 'scope_groups_minus_privileged';
   const normalizedMode: UserIdLimitationMode =
     rawMode === 'none' ||
     rawMode === 'self' ||
@@ -74,7 +74,7 @@ export function normalizeGroupOwnersParameters(
     rawMode === 'scope_groups_minus_privileged' ||
     rawMode === 'exclude_privileged'
       ? rawMode
-      : 'exclude_privileged';
+      : 'scope_groups_minus_privileged';
   const attributeName = String(
     rawLimitation.attribute_name || 'nano_admin_is_workflow_scope_group'
   ).trim();
