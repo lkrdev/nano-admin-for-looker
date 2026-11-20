@@ -156,8 +156,16 @@ export async function createUserAction(
     payload?.user_attributes || {}
   );
 
+  // Enforce email format & admin email domain match before checking duplicates
+  if (email) {
+    if (!BASIC_EMAIL_REGEX.test(email)) {
+      throw new Error('400 Bad Request: A valid email address is required.');
+    }
+    await assertEmailDomainMatchesAdmin(context.sdk, context.userId, email);
+  }
+
   // Pre-check to block creating duplicate users that already exist
-  await assertUserDoesNotExist(context.sdk, email, firstName, lastName);
+  await assertUserDoesNotExist(context.sdk, email);
 
   // 1. Create the base user record
   const newUser = await context.sdk.ok(
@@ -406,36 +414,41 @@ function formatUserSummary(
   };
 }
 
-async function assertUserDoesNotExist(
+const BASIC_EMAIL_REGEX = /^[^\s@%,^]+@[^\s@%,^]+\.[^\s@%,^]+$/;
+
+async function assertEmailDomainMatchesAdmin(
   sdk: any,
-  email: string,
-  firstName: string,
-  lastName: string
+  adminUserId: string,
+  targetEmail: string
 ): Promise<void> {
-  if (email) {
-    if (typeof sdk.search_users === 'function') {
-      const existingByEmail = await sdk.ok(sdk.search_users({ email }));
-      if (Array.isArray(existingByEmail) && existingByEmail.length > 0) {
-        throw new Error(`409 Conflict: A user with email "${email}" already exists.`);
-      }
-    }
+  const targetDomain = targetEmail.split('@')[1]?.trim().toLowerCase() || '';
+  const adminUser = await sdk.ok(sdk.user(adminUserId, 'id,email'));
+  const adminEmail = String(adminUser?.email || '').trim().toLowerCase();
+  const adminDomain = adminEmail.includes('@') ? adminEmail.split('@')[1].trim() : '';
+
+  if (!adminDomain || !targetDomain || targetDomain !== adminDomain) {
+    throw new Error(
+      '403 Forbidden: Created user email domain must match the invoking administrator\'s email domain.'
+    );
+  }
+}
+
+async function assertUserDoesNotExist(sdk: any, email: string): Promise<void> {
+  if (!email) {
+    return;
   }
 
-  const allUsers = await sdk.ok(sdk.all_users({ fields: 'id,first_name,last_name,email' }));
-  for (const existing of allUsers || []) {
-    if (email && String(existing.email || '').trim().toLowerCase() === email.toLowerCase()) {
-      throw new Error(`409 Conflict: A user with email "${email}" already exists (ID: ${existing.id}).`);
-    }
-    if (
-      !email &&
-      firstName &&
-      lastName &&
-      String(existing.first_name || '').trim().toLowerCase() === firstName.toLowerCase() &&
-      String(existing.last_name || '').trim().toLowerCase() === lastName.toLowerCase()
-    ) {
-      throw new Error(
-        `409 Conflict: A user named "${firstName} ${lastName}" already exists (ID: ${existing.id}).`
-      );
+  if (!BASIC_EMAIL_REGEX.test(email)) {
+    throw new Error('400 Bad Request: A valid email address is required.');
+  }
+
+  if (typeof sdk.search_users === 'function') {
+    const existingByEmail = await sdk.ok(sdk.search_users({ email, fields: 'id,email' }));
+    const exactMatch = (Array.isArray(existingByEmail) ? existingByEmail : []).some(
+      (u: any) => String(u?.email || '').trim().toLowerCase() === email.toLowerCase()
+    );
+    if (exactMatch) {
+      throw new Error('409 Conflict: A user with this email already exists.');
     }
   }
 }

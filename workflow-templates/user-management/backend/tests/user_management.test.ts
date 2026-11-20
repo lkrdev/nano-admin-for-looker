@@ -1124,3 +1124,81 @@ test('user-management: create_email_credentials & delete_email_credentials enfor
   });
   assert.equal(res.success, true);
 });
+
+test('user-management: create_user duplicate check rejects wildcards, ignores _ wildcard false matches, and omits user IDs', async () => {
+  let allUsersCalls = 0;
+  const sdk = buildMockLookerSdk({
+    all_users: async () => {
+      allUsersCalls++;
+      return [];
+    },
+    search_users: async (params: any) => {
+      // Simulate Looker SQL LIKE '_' matching bob@example.com when searching b_b@example.com
+      if (params?.email === 'b_b@example.com' || params?.email === 'bob@example.com') {
+        return [{ id: '200', email: 'bob@example.com' }];
+      }
+      return [];
+    },
+    create_user: async (body: any) => ({
+      id: '502',
+      first_name: body.first_name,
+      last_name: body.last_name
+    }),
+    add_group_user: async () => ({})
+  });
+
+  const ctx = makeContext(sdk, { profile: { allow_create: true } }, '100');
+
+  // 1. Cross-domain email is rejected with 403 before search_users is called
+  let searchCalls = 0;
+  const origSearchUsers = sdk.search_users;
+  sdk.search_users = async (p: any) => {
+    searchCalls++;
+    return origSearchUsers(p);
+  };
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'create_user', {
+        first_name: 'External',
+        email: 'ceo@other-tenant.com',
+        group_ids: ['10']
+      }),
+    /403 Forbidden: Created user email domain must match/
+  );
+  assert.equal(searchCalls, 0);
+
+  // 2. '%' wildcard in email is rejected as 400 Bad Request
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'create_user', {
+        first_name: 'Probe',
+        email: 'b%b@example.com',
+        group_ids: ['10']
+      }),
+    /400 Bad Request: A valid email address is required/
+  );
+
+  // 2. Exact match throws 409 without leaking user ID
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'create_user', {
+        first_name: 'Bob',
+        email: 'bob@example.com',
+        group_ids: ['10']
+      }),
+    (err: any) =>
+      /409 Conflict: A user with this email already exists/.test(err?.message || '') &&
+      !/200/.test(err?.message || '')
+  );
+
+  // 3. Underscore in valid email (b_b@example.com) ignores Looker's wildcard match for bob@example.com
+  allUsersCalls = 0;
+  const okRes = await handler(ctx, 'create_user', {
+    first_name: 'Underscore',
+    email: 'b_b@example.com',
+    group_ids: ['10']
+  });
+  assert.equal(okRes.user.id, '502');
+  // Assert all_users was only called once by scope resolution, never by assertUserDoesNotExist
+  assert.equal(allUsersCalls, 1);
+});
