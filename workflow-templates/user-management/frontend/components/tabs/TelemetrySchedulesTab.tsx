@@ -185,20 +185,19 @@ export const TelemetrySchedulesTab: React.FC<TelemetrySchedulesTabProps> = ({
                   {allowManageSchedules && (
                     <td style={{ padding: '10px 12px', textAlign: 'right', whiteSpace: 'nowrap' }}>
                       <div style={{ display: 'flex', gap: '6px', justifyContent: 'flex-end' }}>
-                        <button
-                          onClick={() => handleToggleSchedule(sp.id, !sp.enabled)}
-                          disabled={actionLoading}
-                          style={{ ...secondaryBtnStyle, padding: '4px 8px', fontSize: '11px' }}
-                        >
-                          {sp.enabled ? 'Disable' : 'Enable'}
-                        </button>
-                        <button
-                          onClick={() => handleDeleteSchedule(sp.id)}
-                          disabled={actionLoading}
-                          style={{ ...dangerBtnStyle, padding: '4px 8px', fontSize: '11px' }}
-                        >
-                          Delete
-                        </button>
+                        {sp.enabled ? (
+                          <button
+                            onClick={() => handleToggleSchedule(sp.id, false)}
+                            disabled={actionLoading}
+                            style={{ ...secondaryBtnStyle, padding: '4px 8px', fontSize: '11px' }}
+                          >
+                            Disable
+                          </button>
+                        ) : (
+                          <span style={{ fontSize: '11px', color: '#64748b' }}>
+                            Owner must re-enable in Looker
+                          </span>
+                        )}
                       </div>
                     </td>
                   )}
@@ -238,24 +237,6 @@ export const TelemetrySchedulesTab: React.FC<TelemetrySchedulesTabProps> = ({
       });
       setStatusMsg({ type: 'success', text: res?.message || 'Updated schedule.' });
       addLog(`Updated scheduled plan ${planId} enabled=${enabled}`);
-      handleFetchTelemetry();
-    } catch (err: any) {
-      setStatusMsg({ type: 'error', text: err?.message || String(err) });
-    } finally {
-      setActionLoading(false);
-    }
-  }
-
-  async function handleDeleteSchedule(planId: string) {
-    setActionLoading(true);
-    setStatusMsg(null);
-    try {
-      const res = await callBackend('delete_user_schedule', {
-        user_id: userId,
-        scheduled_plan_id: planId
-      });
-      setStatusMsg({ type: 'success', text: res?.message || 'Deleted schedule.' });
-      addLog(`Deleted scheduled plan ${planId}`);
       handleFetchTelemetry();
     } catch (err: any) {
       setStatusMsg({ type: 'error', text: err?.message || String(err) });

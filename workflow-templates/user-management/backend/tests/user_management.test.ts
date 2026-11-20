@@ -656,11 +656,61 @@ test('user-management: schedule actions fail closed on orphaned/system schedules
         user_id: '200',
         scheduled_plan_id: 'orphaned_plan_123'
       }),
-    /403 Forbidden: Scheduled plan orphaned_plan_123 does not belong to user 200/
+    /403 Forbidden: Deleting scheduled plans is disabled/
   );
 
   assert.equal(updateCalls, 0);
   assert.equal(deleteCalls, 0);
+});
+
+test('user-management: schedule mutations only allow disabling and reassigning (disabling + returning review_url)', async () => {
+  const updateCalls: Array<{ id: string; body: any }> = [];
+  const sdk = buildMockLookerSdk({
+    scheduled_plan: async (id: string) => ({
+      id,
+      user_id: '100',
+      dashboard_id: '42',
+      enabled: true
+    }),
+    update_scheduled_plan: async (id: string, body: any) => {
+      updateCalls.push({ id: String(id), body });
+      return { id, ...body };
+    }
+  });
+
+  const ctx = makeContext(sdk, { telemetry: { allow_manage_schedules: true } }, '100');
+
+  // 1. Enabling a schedule is blocked
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'update_user_schedule', {
+        user_id: '100',
+        scheduled_plan_id: 'sp_1',
+        enabled: true
+      }),
+    /403 Forbidden: Enabling scheduled plans is disabled/
+  );
+
+  // 2. Disabling a schedule succeeds
+  const disableRes = await handler(ctx, 'update_user_schedule', {
+    user_id: '100',
+    scheduled_plan_id: 'sp_1',
+    enabled: false
+  });
+  assert.equal(disableRes.enabled, false);
+
+  // 3. Reassigning a schedule forces enabled: false and returns review_url
+  const reassignRes = await handler(ctx, 'reassign_user_schedule', {
+    user_id: '100',
+    new_owner_user_id: '200',
+    scheduled_plan_id: 'sp_1'
+  });
+  assert.equal(reassignRes.enabled, false);
+  assert.equal(reassignRes.review_url, 'https://test.looker.app/dashboards/42');
+  assert.deepEqual(updateCalls[1], {
+    id: 'sp_1',
+    body: { user_id: '200', enabled: false }
+  });
 });
 
 test('user-management: roles prevents cross-role permission+model flattening escalation', async () => {

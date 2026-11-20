@@ -91,17 +91,23 @@ export async function updateUserScheduleAction(
   await verifyScheduleBelongsToUser(context.sdk, planId, targetUserId);
 
   const enabled = Boolean(payload?.enabled);
+  if (enabled) {
+    throw new Error(
+      '403 Forbidden: Enabling scheduled plans is disabled; schedules must be reviewed and re-enabled by the owner directly in Looker.'
+    );
+  }
+
   const updated = await context.sdk.ok(
-    context.sdk.update_scheduled_plan(planId, { enabled })
+    context.sdk.update_scheduled_plan(planId, { enabled: false })
   );
 
   return {
     success: true,
     user_id: targetUserId,
     scheduled_plan_id: planId,
-    enabled,
+    enabled: false,
     scheduled_plan: updated,
-    message: `Scheduled plan ${planId} has been ${enabled ? 'enabled' : 'disabled'}.`
+    message: `Scheduled plan ${planId} has been disabled.`
   };
 }
 
@@ -115,23 +121,9 @@ export async function deleteUserScheduleAction(
     throw new Error('403 Forbidden: Managing scheduled plans is not permitted for this workflow.');
   }
 
-  const targetUserId = String(payload?.user_id || '').trim();
-  const planId = String(payload?.scheduled_plan_id || '').trim();
-  assertTargetUserInScope(targetUserId, scope);
-
-  if (!planId) {
-    throw new Error('scheduled_plan_id is required.');
-  }
-
-  await verifyScheduleBelongsToUser(context.sdk, planId, targetUserId);
-  await context.sdk.ok(context.sdk.delete_scheduled_plan(planId));
-
-  return {
-    success: true,
-    user_id: targetUserId,
-    scheduled_plan_id: planId,
-    message: `Deleted scheduled plan ${planId}.`
-  };
+  throw new Error(
+    '403 Forbidden: Deleting scheduled plans is disabled; only disabling and reassigning are supported.'
+  );
 }
 
 export async function reassignUserScheduleAction(
@@ -155,19 +147,26 @@ export async function reassignUserScheduleAction(
     throw new Error('scheduled_plan_id is required.');
   }
 
-  await verifyScheduleBelongsToUser(context.sdk, planId, targetUserId);
+  const existingPlan = await verifyScheduleBelongsToUser(context.sdk, planId, targetUserId);
 
+  // Always disable the schedule on reassignment so the new owner must review and re-enable it in Looker
   const updated = await context.sdk.ok(
-    context.sdk.update_scheduled_plan(planId, { user_id: newOwnerUserId })
+    context.sdk.update_scheduled_plan(planId, { user_id: newOwnerUserId, enabled: false })
   );
+
+  const reviewUrl = buildScheduleReviewUrl(existingPlan || updated, context.instanceHost);
 
   return {
     success: true,
     user_id: targetUserId,
     new_owner_user_id: newOwnerUserId,
     scheduled_plan_id: planId,
+    enabled: false,
+    review_url: reviewUrl,
     scheduled_plan: updated,
-    message: `Reassigned scheduled plan ${planId} from user ${targetUserId} to user ${newOwnerUserId}.`
+    message: reviewUrl
+      ? `Reassigned scheduled plan ${planId} from user ${targetUserId} to user ${newOwnerUserId} and set it to inactive. The new owner can review and re-enable it at: ${reviewUrl}`
+      : `Reassigned scheduled plan ${planId} from user ${targetUserId} to user ${newOwnerUserId} and set it to inactive for owner review.`
   };
 }
 
@@ -201,11 +200,20 @@ async function fetchSchedulesForUser(sdk: any, userId: string): Promise<any[]> {
     }));
 }
 
+function buildScheduleReviewUrl(plan: any, instanceHost?: string): string | null {
+  const cleanHost = String(instanceHost || '').trim();
+  if (!cleanHost) return null;
+  const base = `https://${cleanHost}`;
+  if (plan?.dashboard_id) return `${base}/dashboards/${plan.dashboard_id}`;
+  if (plan?.look_id) return `${base}/looks/${plan.look_id}`;
+  return `${base}/admin/scheduled_jobs`;
+}
+
 async function verifyScheduleBelongsToUser(
   sdk: any,
   planId: string,
   expectedUserId: string
-): Promise<void> {
+): Promise<any> {
   if (typeof sdk.scheduled_plan === 'function') {
     const plan = await sdk.ok(sdk.scheduled_plan(planId));
     const ownerId = String(plan?.user_id ?? plan?.user?.id ?? '').trim();
@@ -214,16 +222,17 @@ async function verifyScheduleBelongsToUser(
         `403 Forbidden: Scheduled plan ${planId} does not belong to user ${expectedUserId}.`
       );
     }
-    return;
+    return plan;
   }
 
   const userPlans = await fetchSchedulesForUser(sdk, expectedUserId);
-  const found = userPlans.some((p) => p.id === planId);
+  const found = userPlans.find((p) => p.id === planId);
   if (!found) {
     throw new Error(
       `403 Forbidden: Scheduled plan ${planId} does not belong to user ${expectedUserId}.`
     );
   }
+  return found;
 }
 
 async function queryHistoryTelemetry(
