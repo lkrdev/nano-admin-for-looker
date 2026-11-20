@@ -37,7 +37,7 @@ export const GroupDetailModal: React.FC<GroupDetailModalProps> = ({
   const members = details?.members || [];
   const addableUsers = details?.addable_users || [];
   const eligibleUsers = details?.eligible_users || [];
-  const allGroups = details?.all_groups || [];
+  const candidateGroups = details?.candidate_groups || details?.all_groups || [];
   const subgroups = details?.subgroups || [];
   const addableChildGroups = details?.addable_child_groups || [];
   const owners = details?.group?.owners || [];
@@ -246,7 +246,7 @@ export const GroupDetailModal: React.FC<GroupDetailModalProps> = ({
                                 {u.name} {u.email ? `(${u.email})` : ''} [u:{u.id}]
                               </option>
                             ))
-                          : allGroups.map((g: any) => (
+                          : candidateGroups.map((g: any) => (
                               <option key={g.id} value={g.id}>
                                 {g.name} [g:{g.id}]
                               </option>

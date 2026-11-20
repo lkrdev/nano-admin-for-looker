@@ -97,7 +97,19 @@ export async function getOwnedGroupDetailsAction(
   const currentSubgroupIds = new Set<string>(currentSubgroups.map((sg) => sg.id));
 
   // Determine which existing groups can be added as a child subgroup without creating a cycle
+  const candidateGroupIdsSet = resolveCandidateGroupIdsSet(ownedContext);
   const ancestorIds = await resolveAncestorGroupIds(sdk, groupId);
+  const candidateGroups = (allGroups || [])
+    .filter(
+      (g: any) =>
+        candidateGroupIdsSet.has(String(g.id)) &&
+        g.name !== 'All Users'
+    )
+    .map((g: any) => ({
+      id: String(g.id),
+      name: g.name || `Group ${g.id}`
+    }));
+
   const addableChildGroups = (allGroups || [])
     .map((g: any) => ({
       id: String(g.id),
@@ -106,7 +118,8 @@ export async function getOwnedGroupDetailsAction(
     }))
     .filter(
       (g: any) =>
-        ownedContext.allManageableGroupIdsSet.has(g.id) &&
+        candidateGroupIdsSet.has(g.id) &&
+        (!ownedContext.includeSubgroups || ownedContext.allManageableGroupIdsSet.has(g.id)) &&
         g.id !== groupId &&
         !currentSubgroupIds.has(g.id) &&
         !ancestorIds.has(g.id) &&
@@ -136,12 +149,7 @@ export async function getOwnedGroupDetailsAction(
     })),
     eligible_users: eligibleUsers,
     addable_users: addableUsers,
-    all_groups: (allGroups || [])
-      .filter((g: any) => ownedContext.allManageableGroupIdsSet.has(String(g.id)))
-      .map((g: any) => ({
-        id: String(g.id),
-        name: g.name || `Group ${g.id}`
-      })),
+    candidate_groups: candidateGroups,
     addable_child_groups: addableChildGroups,
     capabilities: params
   };
@@ -225,7 +233,17 @@ export async function updateOwnedGroupOwnerAction(
   if (ownerType === 'user') {
     assertUserAllowedByLimitation(ownerId, ownedContext);
   } else {
-    assertGroupIsManageable(ownerId, ownedContext);
+    const candidateGroupIdsSet = resolveCandidateGroupIdsSet(ownedContext);
+    if (candidateGroupIdsSet.size === 0) {
+      throw new Error(
+        `403 Forbidden: Group owner operations are not supported under user_id_limitation mode "${ownedContext.limitation.mode}".`
+      );
+    }
+    if (!candidateGroupIdsSet.has(ownerId)) {
+      throw new Error(
+        `403 Forbidden: Group "${ownerId}" is outside the allowed scope groups.`
+      );
+    }
     if (operation === 'add' && ownedContext.limitation.active && typeof context.sdk.all_group_users === 'function') {
       const targetMembers = await context.sdk.ok(
         context.sdk.all_group_users({ group_id: ownerId, fields: 'id' })
@@ -274,7 +292,20 @@ export async function addChildGroupAction(
   if (!childGroupId) {
     throw new Error('child_group_id is required.');
   }
-  assertGroupIsManageable(childGroupId, ownedContext);
+  const candidateGroupIdsSet = resolveCandidateGroupIdsSet(ownedContext);
+  if (candidateGroupIdsSet.size === 0) {
+    throw new Error(
+      `403 Forbidden: Adding existing child groups is not supported under user_id_limitation mode "${ownedContext.limitation.mode}".`
+    );
+  }
+  if (!candidateGroupIdsSet.has(childGroupId)) {
+    throw new Error(
+      `403 Forbidden: Child group "${childGroupId}" is outside the allowed scope groups.`
+    );
+  }
+  if (ownedContext.includeSubgroups) {
+    assertGroupIsManageable(childGroupId, ownedContext);
+  }
 
   if (parentGroupId === childGroupId) {
     throw new Error('400 Bad Request: A group cannot be added as a child of itself.');
@@ -374,6 +405,17 @@ async function resolveLimitationForGroupOwners(
     limitationConfig,
     'scope_groups_minus_privileged'
   );
+}
+
+function resolveCandidateGroupIdsSet(ownedContext: ResolvedGroupOwnersContext): Set<string> {
+  const mode = ownedContext.limitation.mode;
+  if (mode === 'scope_groups') {
+    return new Set<string>(
+      (ownedContext.limitation.scopeGroupIds || []).map((id) => String(id))
+    );
+  }
+  // 'self', 'exclude_privileged', 'scope_groups_minus_privileged', and 'none' do not support adding/enumerating candidate groups
+  return new Set<string>();
 }
 
 function assertGroupIsManageable(

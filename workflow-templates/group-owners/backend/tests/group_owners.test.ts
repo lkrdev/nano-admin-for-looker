@@ -88,10 +88,10 @@ function buildMockLookerSdk(overrides: Record<string, any> = {}) {
 
   const hierarchyParents = new Map<string, string[]>([
     ['10', []],
-    ['20', []],
+    ['20', ['10']],
     ['21', ['20']],
     ['30', []],
-    ['40', []]
+    ['40', ['10']]
   ]);
 
   const baseSdk: any = {
@@ -361,31 +361,52 @@ test('group-owners: update_group_owner adds/removes owners and blocks privileged
   });
   assert.equal(remOwnerRes.raw_value, 'u:100,g:10');
 
-  // 4. Delimiter/specifier injection in owner_id is rejected
+  // 4. Adding/removing group owners under exclude_privileged is unsupported
   await assert.rejects(
     async () =>
       await handler(ctx, 'update_group_owner', {
+        group_id: '20',
+        owner_type: 'group',
+        owner_id: '40',
+        operation: 'add'
+      }),
+    /403 Forbidden: Group owner operations are not supported under user_id_limitation mode "exclude_privileged"/i
+  );
+
+  // 5. Under scope_groups:
+  //    - delimiter/specifier injection & out-of-scope groups are rejected
+  //    - unowned groups inside the active Scope Group ('40' under '10') CAN be added as group owner
+  //    - groups containing out-of-scope users ('1') are still rejected
+  const scopedCtx = makeContext(sdk, { user_id_limitation: { mode: 'scope_groups' } }, '100');
+  await assert.rejects(
+    async () =>
+      await handler(scopedCtx, 'update_group_owner', {
         group_id: '20',
         owner_type: 'group',
         owner_id: '30,u:999',
         operation: 'add'
       }),
-    /403 Forbidden: Group "30,u:999" is not in the invoking user's owned group hierarchy/i
+    /403 Forbidden: Group "30,u:999" is outside the allowed scope groups/i
   );
-
-  // 5. Adding an unowned group ('30') as group owner is rejected
   await assert.rejects(
     async () =>
-      await handler(ctx, 'update_group_owner', {
+      await handler(scopedCtx, 'update_group_owner', {
         group_id: '20',
         owner_type: 'group',
         owner_id: '30',
         operation: 'add'
       }),
-    /403 Forbidden: Group "30" is not in the invoking user's owned group hierarchy/i
+    /403 Forbidden: Group "30" is outside the allowed scope groups/i
   );
 
-  // 6. Adding an owned group ('21') that contains a privileged/out-of-scope user ('1') is rejected
+  const addScopedGroupOwnerRes = await handler(scopedCtx, 'update_group_owner', {
+    group_id: '20',
+    owner_type: 'group',
+    owner_id: '40',
+    operation: 'add'
+  });
+  assert.equal(addScopedGroupOwnerRes.raw_value, 'u:100,g:10,g:40');
+
   const origAllGroupUsers = sdk.all_group_users;
   sdk.all_group_users = async (p: any) => {
     if (String(p?.group_id) === '21') return [{ id: '1' }, { id: '200' }];
@@ -393,7 +414,7 @@ test('group-owners: update_group_owner adds/removes owners and blocks privileged
   };
   await assert.rejects(
     async () =>
-      await handler(ctx, 'update_group_owner', {
+      await handler(scopedCtx, 'update_group_owner', {
         group_id: '20',
         owner_type: 'group',
         owner_id: '21',
@@ -453,6 +474,7 @@ test('group-owners: child subgroup mutations enforce hierarchy cycle detection a
   const ctx = makeContext(
     sdk,
     {
+      user_id_limitation: { mode: 'scope_groups' },
       memberships: {
         allow_add_existing_groups: true,
         allow_remove_child_groups: true,
@@ -475,20 +497,26 @@ test('group-owners: child subgroup mutations enforce hierarchy cycle detection a
   );
   await assert.rejects(
     async () => await handler(ctx, 'add_child_group', { parent_group_id: '20', child_group_id: '30' }),
-    /403 Forbidden: Group "30" is not in the invoking user's owned group hierarchy/i
+    /403 Forbidden: Child group "30" is outside the allowed scope groups/i
   );
 
-  // 3. Adding a group that the invoking user also owns succeeds
+  // 3. Adding a group that the invoking user also owns (within Scope Group) succeeds under include_subgroups: true
   const sdkBothOwned = buildMockLookerSdk({
-    all_user_attribute_group_values: async () => [
-      { group_id: '20', value: 'u:100,g:10' },
-      { group_id: '30', value: 'u:999' },
-      { group_id: '40', value: 'u:100' }
-    ]
+    all_user_attribute_group_values: async (attrId: string) => {
+      if (attrId === 'attr_scope') {
+        return [{ group_id: '10', value: 'yes' }];
+      }
+      return [
+        { group_id: '20', value: 'u:100,g:10' },
+        { group_id: '30', value: 'u:999' },
+        { group_id: '40', value: 'u:100' }
+      ];
+    }
   });
   const ctxBothOwned = makeContext(
     sdkBothOwned,
     {
+      user_id_limitation: { mode: 'scope_groups' },
       memberships: {
         allow_add_existing_groups: true,
         allow_remove_child_groups: true,
@@ -503,7 +531,53 @@ test('group-owners: child subgroup mutations enforce hierarchy cycle detection a
   });
   assert.equal(addChildRes.success, true);
 
-  // 3. Creating a new child group under '20' creates group '50' and attaches it
+  // 4. When include_subgroups: false under scope_groups, unowned group '40' inside Scope Group '10' CAN be added as child and appears in addable_child_groups
+  const sdkUnownedInScope = buildMockLookerSdk();
+  const ctxNoInherit = makeContext(
+    sdkUnownedInScope,
+    {
+      include_subgroups: false,
+      user_id_limitation: { mode: 'scope_groups' },
+      memberships: {
+        allow_add_existing_groups: true,
+        allow_remove_child_groups: true,
+        allow_create_subgroups: true
+      }
+    },
+    '100'
+  );
+  const detailsNoInherit = await handler(ctxNoInherit, 'get_group_details', { group_id: '20' });
+  assert.ok(detailsNoInherit.candidate_groups.some((g: any) => g.id === '40'));
+  assert.ok(!detailsNoInherit.candidate_groups.some((g: any) => g.id === '30'));
+  assert.ok(detailsNoInherit.addable_child_groups.some((g: any) => g.id === '40'));
+
+  const addUnownedInScopeRes = await handler(ctxNoInherit, 'add_child_group', {
+    parent_group_id: '20',
+    child_group_id: '40'
+  });
+  assert.equal(addUnownedInScopeRes.success, true);
+
+  // 5. Under mode: 'self' and 'scope_groups_minus_privileged', candidate_groups and addable_child_groups are empty and add_child_group is rejected
+  for (const blockedMode of ['self', 'scope_groups_minus_privileged'] as const) {
+    const ctxBlocked = makeContext(
+      buildMockLookerSdk(),
+      {
+        include_subgroups: false,
+        user_id_limitation: { mode: blockedMode },
+        memberships: { allow_add_existing_groups: true }
+      },
+      '100'
+    );
+    const detailsBlocked = await handler(ctxBlocked, 'get_group_details', { group_id: '20' });
+    assert.deepEqual(detailsBlocked.candidate_groups, []);
+    assert.deepEqual(detailsBlocked.addable_child_groups, []);
+    await assert.rejects(
+      async () => await handler(ctxBlocked, 'add_child_group', { parent_group_id: '20', child_group_id: '40' }),
+      new RegExp(`403 Forbidden: Adding existing child groups is not supported under user_id_limitation mode "${blockedMode}"`, 'i')
+    );
+  }
+
+  // 6. Creating a new child group under '20' creates group '50' and attaches it
   const createChildRes = await handler(ctx, 'create_child_group', {
     parent_group_id: '20',
     group_name: 'Marketing Regional Subgroup'

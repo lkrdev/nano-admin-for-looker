@@ -153,14 +153,12 @@ export async function isUserAuthorized(
  * When includeSubgroups is true, also includes users belonging to descendant child groups.
  * Returns an array of string user IDs.
  */
-export async function getScopeGroupUserIds(
+export async function getScopeGroupIds(
   sdk: any,
   userId: string,
   attributeName: string = 'nano_admin_is_workflow_scope_group',
   includeSubgroups: boolean = false
 ): Promise<string[]> {
-  console.log(`Resolving scope group user IDs for user ${userId} with attribute "${attributeName}"...`);
-
   const userGroupIds = await getUserGroups(sdk, userId);
   if (!userGroupIds || userGroupIds.length === 0) {
     return [];
@@ -219,8 +217,24 @@ export async function getScopeGroupUserIds(
     }
   }
 
+  return Array.from(targetGroupIdSet);
+}
+
+export async function getScopeGroupUserIds(
+  sdk: any,
+  userId: string,
+  attributeName: string = 'nano_admin_is_workflow_scope_group',
+  includeSubgroups: boolean = false
+): Promise<string[]> {
+  console.log(`Resolving scope group user IDs for user ${userId} with attribute "${attributeName}"...`);
+
+  const targetGroupIds = await getScopeGroupIds(sdk, userId, attributeName, includeSubgroups);
+  if (targetGroupIds.length === 0) {
+    return [];
+  }
+
   const scopeUserIdSet = new Set<string>();
-  for (const groupId of Array.from(targetGroupIdSet)) {
+  for (const groupId of targetGroupIds) {
     try {
       const groupUsers = await sdk.ok(sdk.all_group_users({ group_id: groupId, fields: 'id' }));
       (groupUsers || []).forEach((u: any) => {
@@ -349,6 +363,7 @@ export interface UserIdLimitationResult {
   active: boolean;
   userIds: string[];
   mode: UserIdLimitationMode;
+  scopeGroupIds?: string[];
 }
 
 export async function resolveUserIdLimitation(
@@ -383,7 +398,10 @@ export async function resolveUserIdLimitation(
   if (mode === 'scope_groups' || mode === 'scope_groups_minus_privileged') {
     const attributeName = limitation?.attribute_name || 'nano_admin_is_workflow_scope_group';
     const includeSubgroups = Boolean(limitation?.include_subgroups);
-    const scopeUserIds = await getScopeGroupUserIds(sdk, currentUserId, attributeName, includeSubgroups);
+    const [scopeUserIds, scopeGroupIds] = await Promise.all([
+      getScopeGroupUserIds(sdk, currentUserId, attributeName, includeSubgroups),
+      getScopeGroupIds(sdk, currentUserId, attributeName, true)
+    ]);
 
     if (mode === 'scope_groups_minus_privileged') {
       const privilegedIds = await getPrivilegedUserIds(sdk);
@@ -391,11 +409,12 @@ export async function resolveUserIdLimitation(
       return {
         active: true,
         userIds: filteredIds,
-        mode: 'scope_groups_minus_privileged'
+        mode: 'scope_groups_minus_privileged',
+        scopeGroupIds
       };
     }
 
-    return { active: true, userIds: scopeUserIds, mode: 'scope_groups' };
+    return { active: true, userIds: scopeUserIds, mode: 'scope_groups', scopeGroupIds };
   }
 
   throw new Error(`Unsupported user_id_limitation mode: "${String(mode)}"`);
