@@ -879,3 +879,67 @@ test('checkRateLimit & authenticateRequest — reject >10 char X-Looker-User-ID 
   }
 });
 
+test('workflow-groups-manager handler — manage_group_members blocks add and restricts remove to active Scope Groups', async () => {
+  let addedCalls = 0;
+  let removedCalls: Array<{ groupId: string; userId: string }> = [];
+
+  const mockSdk: any = {
+    ok: async (val: any) => await val,
+    all_user_attributes: async () => [
+      { id: 'attr_scope', name: 'nano_admin_is_workflow_scope_group' }
+    ],
+    all_user_attribute_group_values: async () => [
+      { group_id: '10', value: 'yes' },
+      { group_id: '2', value: '' }
+    ],
+    add_group_user: async () => {
+      addedCalls++;
+      return {};
+    },
+    delete_group_user: async (groupId: string, userId: string) => {
+      removedCalls.push({ groupId, userId });
+      return {};
+    }
+  };
+
+  const ctx: any = {
+    sdk: mockSdk,
+    userId: '100',
+    workflowId: 'groups-manager',
+    instanceHost: 'dev.looker.app',
+    parameters: {}
+  };
+
+  // 1. Adding users to any group is rejected
+  await assert.rejects(
+    async () =>
+      await wgmHandler(ctx, 'manage_group_members', {
+        group_id: '2',
+        user_id: '100',
+        operation: 'add'
+      }),
+    /403 Forbidden: Adding users to existing groups is disabled/i
+  );
+  assert.equal(addedCalls, 0);
+
+  // 2. Removing from a non-Scope Group (e.g. Looker Admin group '2') is rejected
+  await assert.rejects(
+    async () =>
+      await wgmHandler(ctx, 'manage_group_members', {
+        group_id: '2',
+        user_id: '1',
+        operation: 'remove'
+      }),
+    /403 Forbidden: Group "2" is not an active Scope Group/i
+  );
+
+  // 3. Removing a member from an active Scope Group ('10') for remediation succeeds
+  const res = await wgmHandler(ctx, 'manage_group_members', {
+    group_id: '10',
+    user_id: '1',
+    operation: 'remove'
+  });
+  assert.equal(res.success, true);
+  assert.deepEqual(removedCalls, [{ groupId: '10', userId: '1' }]);
+});
+

@@ -29,7 +29,6 @@ export const GroupInspectionModal: React.FC<GroupInspectionModalProps> = ({
   const [activeTab, setActiveTab] = useState<'members' | 'owners' | 'subgroups'>('members');
 
   const [memberSearch, setMemberSearch] = useState<string>('');
-  const [selectedUserIdToAdd, setSelectedUserIdToAdd] = useState<string>('');
   const [ownerTypeToAdd, setOwnerTypeToAdd] = useState<'user' | 'group'>('user');
   const [selectedOwnerIdToAdd, setSelectedOwnerIdToAdd] = useState<string>('');
 
@@ -40,7 +39,6 @@ export const GroupInspectionModal: React.FC<GroupInspectionModalProps> = ({
   const allGroups = data?.all_groups || [];
 
   const filteredMembers = useMemo(filterMembersList, [members, memberSearch]);
-  const addableUsers = useMemo(computeAddableUsers, [allUsers, members]);
 
   useEffect(handleFetchGroupInspection, [groupId]);
 
@@ -117,33 +115,6 @@ export const GroupInspectionModal: React.FC<GroupInspectionModalProps> = ({
             {/* Members Tab */}
             {activeTab === 'members' && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                <div style={actionBoxStyle}>
-                  <div style={{ fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}>
-                    Add User to Group
-                  </div>
-                  <div style={{ display: 'flex', gap: '8px' }}>
-                    <select
-                      value={selectedUserIdToAdd}
-                      onChange={handleSelectedUserChange}
-                      style={{ ...inputStyle, flex: 1 }}
-                    >
-                      <option value="">-- Select User ({addableUsers.length} available) --</option>
-                      {addableUsers.map((u: any) => (
-                        <option key={u.id} value={u.id}>
-                          {u.name} {u.email ? `(${u.email})` : ''} [ID: {u.id}]
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      onClick={handleAddMember}
-                      disabled={actionLoading || !selectedUserIdToAdd}
-                      style={primaryBtnStyle}
-                    >
-                      Add Member
-                    </button>
-                  </div>
-                </div>
-
                 <div>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                     <span style={{ fontSize: '12px', fontWeight: 700, color: '#334155' }}>
@@ -351,11 +322,6 @@ export const GroupInspectionModal: React.FC<GroupInspectionModalProps> = ({
     );
   }
 
-  function computeAddableUsers() {
-    const memberIdSet = new Set<string>(members.map((m: any) => String(m.id)));
-    return allUsers.filter((u: any) => !memberIdSet.has(String(u.id)));
-  }
-
   function handleFetchGroupInspection() {
     setLoading(true);
     setErrorMsg(null);
@@ -384,29 +350,6 @@ export const GroupInspectionModal: React.FC<GroupInspectionModalProps> = ({
 
   function handleMemberSearchChange(e: React.ChangeEvent<HTMLInputElement>) {
     setMemberSearch(e.target.value);
-  }
-
-  function handleSelectedUserChange(e: React.ChangeEvent<HTMLSelectElement>) {
-    setSelectedUserIdToAdd(e.target.value);
-  }
-
-  function handleAddMember() {
-    if (!selectedUserIdToAdd) return;
-    setActionLoading(true);
-    setErrorMsg(null);
-    callBackend('manage_group_members', {
-      group_id: groupId,
-      user_id: selectedUserIdToAdd,
-      operation: 'add'
-    })
-      .then(() => {
-        addLog(`Added user ${selectedUserIdToAdd} to group ${groupId}`);
-        setSelectedUserIdToAdd('');
-        handleFetchGroupInspection();
-        onGroupUpdated();
-      })
-      .catch((err) => setErrorMsg(err.message || 'Failed to add member to group.'))
-      .finally(() => setActionLoading(false));
   }
 
   function handleRemoveMember(userId: string) {

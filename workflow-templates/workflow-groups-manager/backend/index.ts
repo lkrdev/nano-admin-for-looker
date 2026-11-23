@@ -138,8 +138,20 @@ export const handler = async (
   if (action === 'manage_group_members') {
     const groupId = String(payload?.group_id || '').trim();
     const userId = String(payload?.user_id || '').trim();
-    const op = String(payload?.operation || 'add').trim();
-    return await manageGroupMembers(sdk, groupId, userId, op);
+    const op = String(payload?.operation || '').trim().toLowerCase();
+    if (op !== 'remove') {
+      throw new Error(
+        '403 Forbidden: Adding users to existing groups is disabled in workflow-groups-manager; only removing members from active Scope Groups for remediation is permitted.'
+      );
+    }
+    const { scopeAttributes } = await resolveConfiguredAttributeAllowlists(
+      sdk,
+      defaultAttr,
+      defaultOwnerAttr,
+      context.instanceHost
+    );
+    await assertGroupIsActiveScopeGroup(sdk, groupId, scopeAttributes);
+    return await removeMemberFromScopeGroup(sdk, groupId, userId);
   }
 
   throw new Error(
@@ -1141,13 +1153,39 @@ async function removeUserAttributeOverride(sdk: any, userId: string, attributeId
   return { success: true, message: `Removed user-level override for user ${userId}.` };
 }
 
-async function manageGroupMembers(sdk: any, groupId: string, userId: string, operation: string) {
-  if (operation === 'add') {
-    await sdk.ok(sdk.add_group_user(groupId, { user_id: userId }));
-    return { success: true, message: `Added user ${userId} to group ${groupId}.` };
-  } else if (operation === 'remove') {
-    await sdk.ok(sdk.delete_group_user(groupId, userId));
-    return { success: true, message: `Removed user ${userId} from group ${groupId}.` };
+async function assertGroupIsActiveScopeGroup(
+  sdk: any,
+  groupId: string,
+  scopeAttributes: Set<string>
+): Promise<void> {
+  if (!groupId) {
+    throw new Error('400 Bad Request: group_id is required.');
   }
-  throw new Error(`Unsupported membership operation "${operation}".`);
+  const allAttrs = await sdk.ok(sdk.all_user_attributes({ fields: 'id,name' }));
+  for (const attr of allAttrs || []) {
+    const attrName = String(attr?.name || '').trim();
+    if (!attrName || !scopeAttributes.has(attrName) || isInternalBlockedAttribute(attrName, attr)) {
+      continue;
+    }
+    const groupValues = await sdk.ok(sdk.all_user_attribute_group_values(attr.id));
+    const isTaggedYes = (groupValues || []).some(
+      (gv: any) =>
+        String(gv?.group_id || '').trim() === groupId &&
+        classifyScopeAttributeValue(gv?.value) === 'yes'
+    );
+    if (isTaggedYes) {
+      return;
+    }
+  }
+  throw new Error(
+    `403 Forbidden: Group "${groupId}" is not an active Scope Group; member removal is restricted to active Scope Groups for remediation.`
+  );
+}
+
+async function removeMemberFromScopeGroup(sdk: any, groupId: string, userId: string) {
+  if (!userId) {
+    throw new Error('400 Bad Request: user_id is required.');
+  }
+  await sdk.ok(sdk.delete_group_user(groupId, userId));
+  return { success: true, message: `Removed user ${userId} from Scope Group ${groupId}.` };
 }
