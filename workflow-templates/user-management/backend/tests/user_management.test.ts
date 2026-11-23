@@ -1470,3 +1470,67 @@ test('user-management: update_user_schedule and reassign_user_schedule request s
   assert.equal(capturedUpdateFields.length, 2);
   assert.ok(capturedUpdateFields.every((f) => typeof f === 'string' && f.includes('id')));
 });
+
+test('user-management: update_user_profile enforces email format, admin domain match, and duplicate check', async () => {
+  let searchCalls = 0;
+  const sdk = buildMockLookerSdk({
+    search_users: async (params: any) => {
+      searchCalls++;
+      if (params?.email === 'existing@example.com') {
+        return [{ id: '201', email: 'existing@example.com' }];
+      }
+      if (params?.email === 'bob@example.com') {
+        return [{ id: '200', email: 'bob@example.com' }];
+      }
+      return [];
+    },
+    update_user_credentials_email: async () => ({})
+  });
+
+  const ctx = makeContext(sdk, { profile: { allow_update_email: true } }, '100');
+
+  // 1. Wildcard/invalid email rejected with 400
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'update_user_profile', {
+        user_id: '200',
+        email: 'b%b@example.com'
+      }),
+    /400 Bad Request: A valid email address is required/
+  );
+  assert.equal(searchCalls, 0);
+
+  // 2. Cross-domain email rejected with 403 before search_users
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'update_user_profile', {
+        user_id: '200',
+        email: 'bob@other-tenant.com'
+      }),
+    /403 Forbidden: .*email domain must match/
+  );
+  assert.equal(searchCalls, 0);
+
+  // 3. Duplicate email on a different user rejected with 409
+  await assert.rejects(
+    async () =>
+      await handler(ctx, 'update_user_profile', {
+        user_id: '200',
+        email: 'existing@example.com'
+      }),
+    /409 Conflict: A user with this email already exists/
+  );
+
+  // 4. Updating with the target user's own email or a fresh same-domain email succeeds
+  const selfRes = await handler(ctx, 'update_user_profile', {
+    user_id: '200',
+    email: 'bob@example.com'
+  });
+  assert.equal(selfRes.user.id, '200');
+
+  const freshRes = await handler(ctx, 'update_user_profile', {
+    user_id: '200',
+    email: 'bobby@example.com'
+  });
+  assert.equal(freshRes.user.id, '200');
+});

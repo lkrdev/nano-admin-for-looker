@@ -201,16 +201,10 @@ export async function createUserAction(
     payload?.user_attributes || {}
   );
 
-  // Enforce email format & admin email domain match before checking duplicates
+  // Enforce email format, admin email domain match, and duplicate check
   if (email) {
-    if (!BASIC_EMAIL_REGEX.test(email)) {
-      throw new Error('400 Bad Request: A valid email address is required.');
-    }
-    await assertEmailDomainMatchesAdmin(context.sdk, context.userId, email);
+    await validateTargetEmailForAdmin(context.sdk, context.userId, email);
   }
-
-  // Pre-check to block creating duplicate users that already exist
-  await assertUserDoesNotExist(context.sdk, email);
 
   // 1. Create the base user record
   const newUser = await context.sdk.ok(
@@ -319,6 +313,7 @@ export async function updateUserProfileAction(
     if (!newEmail) {
       throw new Error('A valid non-empty email address is required.');
     }
+    await validateTargetEmailForAdmin(context.sdk, context.userId, newEmail, targetUserId);
     if (typeof context.sdk.update_user_credentials_email === 'function') {
       await context.sdk.ok(
         context.sdk.update_user_credentials_email(targetUserId, { email: newEmail })
@@ -467,6 +462,19 @@ function formatUserSummary(
 
 const BASIC_EMAIL_REGEX = /^[^\s@%,^]+@[^\s@%,^]+\.[^\s@%,^]+$/;
 
+async function validateTargetEmailForAdmin(
+  sdk: any,
+  adminUserId: string,
+  email: string,
+  excludeUserId?: string
+): Promise<void> {
+  if (!BASIC_EMAIL_REGEX.test(email)) {
+    throw new Error('400 Bad Request: A valid email address is required.');
+  }
+  await assertEmailDomainMatchesAdmin(sdk, adminUserId, email);
+  await assertUserDoesNotExist(sdk, email, excludeUserId);
+}
+
 async function assertEmailDomainMatchesAdmin(
   sdk: any,
   adminUserId: string,
@@ -484,7 +492,11 @@ async function assertEmailDomainMatchesAdmin(
   }
 }
 
-async function assertUserDoesNotExist(sdk: any, email: string): Promise<void> {
+async function assertUserDoesNotExist(
+  sdk: any,
+  email: string,
+  excludeUserId?: string
+): Promise<void> {
   if (!email) {
     return;
   }
@@ -496,7 +508,9 @@ async function assertUserDoesNotExist(sdk: any, email: string): Promise<void> {
   if (typeof sdk.search_users === 'function') {
     const existingByEmail = await sdk.ok(sdk.search_users({ email, fields: 'id,email' }));
     const exactMatch = (Array.isArray(existingByEmail) ? existingByEmail : []).some(
-      (u: any) => String(u?.email || '').trim().toLowerCase() === email.toLowerCase()
+      (u: any) =>
+        String(u?.email || '').trim().toLowerCase() === email.toLowerCase() &&
+        (!excludeUserId || String(u?.id || '').trim() !== excludeUserId)
     );
     if (exactMatch) {
       throw new Error('409 Conflict: A user with this email already exists.');
