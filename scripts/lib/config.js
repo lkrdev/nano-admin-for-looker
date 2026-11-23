@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 const { askQuestion } = require('./ui');
+const { discoverGcfServiceAccounts, buildDedicatedServiceAccountEmail } = require('./gcp');
 const { getLookerCliProfiles, resolveLookerProfileName, runLookerCli } = require('./prereqs');
 
 function loadEnvFile() {
@@ -162,6 +163,7 @@ function getSavedGCPConfig(config) {
     gcp_project_id: config.gcp_project_id,
     gcp_region: config.gcp_region,
     gcf_name: config.gcf_name,
+    gcf_service_account: config.gcf_service_account || buildDedicatedServiceAccountEmail(config.gcp_project_id),
     gcf_ingress_settings: normalizeIngressSettings(config.gcf_ingress_settings),
     gcs_bucket_name: config.gcs_bucket_name
   };
@@ -294,6 +296,7 @@ async function promptGCPConfig(config, localDefaults = {}) {
   const gcfNameInput = await askQuestion(`Enter Cloud Function Name [${config.gcf_name || 'nano-admin-backend'}]: `);
   const functionName = gcfNameInput || config.gcf_name || 'nano-admin-backend';
 
+  const gcfServiceAccount = await promptGCFServiceAccount(finalProjectId, functionName, region, config.gcf_service_account);
   const gcfIngressSettings = await promptGCFIngressSettings(config.gcf_ingress_settings);
 
   const defaultBucket = config.gcs_bucket_name || `${finalProjectId}-nano-admin-extension`;
@@ -304,6 +307,7 @@ async function promptGCPConfig(config, localDefaults = {}) {
     gcp_project_id: finalProjectId,
     gcp_region: region,
     gcf_name: functionName,
+    gcf_service_account: gcfServiceAccount,
     gcf_ingress_settings: gcfIngressSettings,
     gcs_bucket_name: bucketName
   };
@@ -311,6 +315,24 @@ async function promptGCPConfig(config, localDefaults = {}) {
     res.gcf_url = config.gcf_url;
   }
   return res;
+}
+
+async function promptGCFServiceAccount(projectId, gcfName, region, savedSa) {
+  console.log('\n🔐 Discovering Cloud Function Service Accounts (least-privilege IAM)...');
+  const { defaultSaEmail, existingAccounts, currentFunctionSa } = discoverGcfServiceAccounts(projectId, gcfName, region);
+
+  if (existingAccounts.length > 0) {
+    console.log('  Discovered non-default Service Accounts in project:');
+    existingAccounts.forEach((sa, idx) => {
+      console.log(`    ${idx + 1}. ${sa.email}${sa.displayName ? ` (${sa.displayName})` : ''}`);
+    });
+  } else {
+    console.log(`  No custom Service Accounts found; will create dedicated SA: ${defaultSaEmail}`);
+  }
+
+  const defaultChoice = savedSa || currentFunctionSa || defaultSaEmail;
+  const saInput = await askQuestion(`Enter dedicated Service Account email for Cloud Function [${defaultChoice}]: `);
+  return (saInput || defaultChoice).trim();
 }
 
 function normalizeIngressSettings(val) {

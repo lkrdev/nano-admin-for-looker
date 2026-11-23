@@ -39,6 +39,12 @@ function printDeploymentPreview(config, lookerUsers, status) {
   console.log(`  • GCP Project ID:         ${config.gcp_project_id}`);
   console.log(`  • GCP Region:             ${config.gcp_region}`);
   console.log(`  • Cloud Function Name:    ${config.gcf_name}`);
+  console.log(
+    `  • Cloud Function SA:      ${status.gcfServiceAccountEmail || config.gcf_service_account} (${status.gcfServiceAccountExists ? 'Existing (reusing)' : 'New (will create)'})`
+  );
+  console.log(
+    `  • Secret IAM Scope:       Per-secret roles/secretmanager.secretAccessor (${(status.plannedSecretNames || ['GCF_HMAC_SECRET']).join(', ')})`
+  );
   console.log(`  • Cloud Function Ingress: ${config.gcf_ingress_settings || 'all'}`);
   console.log(`  • GCS Bucket Name:        ${config.gcs_bucket_name}`);
   console.log(`  • Active GCP Account:     ${status.gcpAccount || 'Authenticated User'}`);

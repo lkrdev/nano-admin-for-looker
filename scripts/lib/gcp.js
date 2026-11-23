@@ -87,6 +87,52 @@ function checkSecretsExistInGCP(projectId, instances = []) {
   }
 }
 
+function buildDedicatedServiceAccountEmail(projectId) {
+  return `nano-admin-gcf@${projectId}.iam.gserviceaccount.com`;
+}
+
+function discoverGcfServiceAccounts(projectId, gcfName, gcpRegion) {
+  const defaultSaEmail = buildDedicatedServiceAccountEmail(projectId);
+  const existingAccounts = [];
+  try {
+    const raw = execFileSync(
+      'gcloud',
+      ['iam', 'service-accounts', 'list', `--project=${projectId}`, '--format=json'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    );
+    const parsed = JSON.parse(raw || '[]');
+    for (const sa of parsed) {
+      const email = String(sa?.email || '').trim();
+      if (email && !email.endsWith('-compute@developer.gserviceaccount.com')) {
+        existingAccounts.push({
+          email,
+          displayName: sa.displayName || ''
+        });
+      }
+    }
+  } catch (e) {}
+
+  let currentFunctionSa = '';
+  if (gcfName && gcpRegion) {
+    try {
+      const saEmail = execFileSync(
+        'gcloud',
+        ['functions', 'describe', gcfName, `--region=${gcpRegion}`, `--project=${projectId}`, '--format=value(serviceConfig.serviceAccountEmail)'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+      ).trim();
+      if (saEmail && !saEmail.endsWith('-compute@developer.gserviceaccount.com')) {
+        currentFunctionSa = saEmail;
+      }
+    } catch (e) {}
+  }
+
+  return {
+    defaultSaEmail,
+    existingAccounts,
+    currentFunctionSa
+  };
+}
+
 async function scanExistingResources(config, getLookerSaFn) {
   let gcpAccount = 'Unknown Account';
   try {
@@ -106,10 +152,36 @@ async function scanExistingResources(config, getLookerSaFn) {
     functionExists = true;
   } catch (e) {}
 
+  const gcfServiceAccountEmail = config.gcf_service_account || buildDedicatedServiceAccountEmail(config.gcp_project_id);
+  let gcfServiceAccountExists = false;
+  try {
+    execFileSync(
+      'gcloud',
+      ['iam', 'service-accounts', 'describe', gcfServiceAccountEmail, `--project=${config.gcp_project_id}`],
+      { stdio: 'ignore' }
+    );
+    gcfServiceAccountExists = true;
+  } catch (e) {}
+
+  const instances = Array.isArray(config.instances) && config.instances.length > 0
+    ? config.instances
+    : (config.looker_host ? [{ looker_host: config.looker_host }] : []);
+  const plannedSecretNames = ['GCF_HMAC_SECRET'];
+  for (const inst of instances) {
+    if (inst?.looker_host) {
+      const sanitizedHost = sanitizeHostForSecret(inst.looker_host);
+      plannedSecretNames.push(`NANO_ADMIN_LOOKERSDK_CLIENT_ID_${sanitizedHost}`);
+      plannedSecretNames.push(`NANO_ADMIN_LOOKERSDK_CLIENT_SECRET_${sanitizedHost}`);
+    }
+  }
+
   return {
     gcpAccount,
     secretHmacExists,
-    functionExists
+    functionExists,
+    gcfServiceAccountEmail,
+    gcfServiceAccountExists,
+    plannedSecretNames
   };
 }
 
@@ -189,16 +261,30 @@ async function deployGCF(config, lookerCreds) {
     console.warn('⚠️ Warning: Failed to enable services automatically. Make sure they are enabled in your GCP project.');
   }
 
-  const projectNumber = execFileSync('gcloud', ['projects', 'describe', config.gcp_project_id, '--format=value(projectNumber)'], { encoding: 'utf8' }).trim();
-  const defaultSa = `${projectNumber}-compute@developer.gserviceaccount.com`;
-  console.log(`Default Compute Engine service account: ${defaultSa}`);
-
-  console.log(`Ensuring Secret Accessor permission for default Compute Service Account: ${defaultSa}...`);
+  const gcfServiceAccount = config.gcf_service_account || buildDedicatedServiceAccountEmail(config.gcp_project_id);
+  console.log(`Ensuring dedicated least-privilege Cloud Function service account: ${gcfServiceAccount}...`);
   try {
-    execFileSync('gcloud', ['projects', 'add-iam-policy-binding', config.gcp_project_id, `--member=serviceAccount:${defaultSa}`, '--role=roles/secretmanager.secretAccessor'], { stdio: 'ignore' });
-    console.log('✅ Granted roles/secretmanager.secretAccessor permission.');
+    execFileSync(
+      'gcloud',
+      ['iam', 'service-accounts', 'describe', gcfServiceAccount, `--project=${config.gcp_project_id}`],
+      { stdio: 'ignore' }
+    );
+    console.log(`✅ Reusing existing dedicated service account: ${gcfServiceAccount}`);
   } catch (e) {
-    console.warn('⚠️ Warning: Failed to grant project-level Secret Accessor permission automatically.');
+    const saAccountId = gcfServiceAccount.split('@')[0];
+    execFileSync(
+      'gcloud',
+      [
+        'iam',
+        'service-accounts',
+        'create',
+        saAccountId,
+        `--project=${config.gcp_project_id}`,
+        '--display-name=Nano Admin Backend Cloud Function SA'
+      ],
+      { stdio: 'inherit' }
+    );
+    console.log(`✅ Created dedicated service account: ${gcfServiceAccount}`);
   }
 
   let secretManagerError = null;
@@ -209,21 +295,25 @@ async function deployGCF(config, lookerCreds) {
   try {
     let hasHmac = false;
     try {
-      execFileSync('gcloud', ['secrets', 'describe', 'GCF_HMAC_SECRET'], { stdio: 'ignore' });
+      execFileSync('gcloud', ['secrets', 'describe', 'GCF_HMAC_SECRET', `--project=${config.gcp_project_id}`], { stdio: 'ignore' });
       hasHmac = true;
       console.log('✅ GCF_HMAC_SECRET already exists in Secret Manager.');
     } catch (e) {
       console.log('Creating GCF_HMAC_SECRET secret in Secret Manager...');
       try {
-        execFileSync('gcloud', ['secrets', 'create', 'GCF_HMAC_SECRET', '--replication-policy=automatic'], { stdio: 'inherit' });
+        execFileSync('gcloud', ['secrets', 'create', 'GCF_HMAC_SECRET', '--replication-policy=automatic', `--project=${config.gcp_project_id}`], { stdio: 'inherit' });
       } catch (err) {}
     }
 
     if (!hasHmac) {
       const hmacSecret = crypto.randomBytes(32).toString('hex');
       console.log('Adding new secret version for GCF_HMAC_SECRET...');
-      execFileSync('gcloud', ['secrets', 'versions', 'add', 'GCF_HMAC_SECRET', '--data-file=-'], { input: hmacSecret, stdio: ['pipe', 'inherit', 'inherit'] });
+      execFileSync('gcloud', ['secrets', 'versions', 'add', 'GCF_HMAC_SECRET', `--project=${config.gcp_project_id}`, '--data-file=-'], { input: hmacSecret, stdio: ['pipe', 'inherit', 'inherit'] });
     }
+
+    try {
+      execFileSync('gcloud', ['secrets', 'add-iam-policy-binding', 'GCF_HMAC_SECRET', `--member=serviceAccount:${gcfServiceAccount}`, '--role=roles/secretmanager.secretAccessor', `--project=${config.gcp_project_id}`], { stdio: 'ignore' });
+    } catch (e) {}
 
     const instances = Array.isArray(config.instances) && config.instances.length > 0
       ? config.instances
@@ -257,8 +347,8 @@ async function deployGCF(config, lookerCreds) {
         secretBindings.push(`${clientSecretSecret}=${clientSecretSecret}:latest`);
 
         try {
-          execFileSync('gcloud', ['secrets', 'add-iam-policy-binding', clientIdSecret, `--member=serviceAccount:${defaultSa}`, '--role=roles/secretmanager.secretAccessor', `--project=${config.gcp_project_id}`], { stdio: 'ignore' });
-          execFileSync('gcloud', ['secrets', 'add-iam-policy-binding', clientSecretSecret, `--member=serviceAccount:${defaultSa}`, '--role=roles/secretmanager.secretAccessor', `--project=${config.gcp_project_id}`], { stdio: 'ignore' });
+          execFileSync('gcloud', ['secrets', 'add-iam-policy-binding', clientIdSecret, `--member=serviceAccount:${gcfServiceAccount}`, '--role=roles/secretmanager.secretAccessor', `--project=${config.gcp_project_id}`], { stdio: 'ignore' });
+          execFileSync('gcloud', ['secrets', 'add-iam-policy-binding', clientSecretSecret, `--member=serviceAccount:${gcfServiceAccount}`, '--role=roles/secretmanager.secretAccessor', `--project=${config.gcp_project_id}`], { stdio: 'ignore' });
         } catch (e) {}
       }
     }
@@ -273,6 +363,7 @@ async function deployGCF(config, lookerCreds) {
   const ingressSettings = config.gcf_ingress_settings || 'all';
 
   console.log(`\n🚀 Deploying Cloud Function: ${config.gcf_name} to region ${config.gcp_region}...`);
+  console.log(`Configuring dedicated service account: [${gcfServiceAccount}]`);
   console.log(`Configuring instance allowlist: [${allowedInstances}]`);
   console.log(`Configuring instance auth modes: [${instanceAuthModesEnv}]`);
   console.log(`Configuring ingress settings: [${ingressSettings}]`);
@@ -286,6 +377,7 @@ async function deployGCF(config, lookerCreds) {
     '--trigger-http',
     '--allow-unauthenticated',
     `--ingress-settings=${ingressSettings}`,
+    `--service-account=${gcfServiceAccount}`,
     '--entry-point=nanoAdminBackend',
     '--source=backend',
     `--set-env-vars=^|^BUILD_HASH=${localBuildHash}|LOOKER_ALLOWED_INSTANCES=${allowedInstances}|LOOKER_INSTANCE_AUTH_MODES=${instanceAuthModesEnv}`,
@@ -458,6 +550,8 @@ module.exports = {
   loadLocalBuildHash,
   resolveCanonicalGcfUrl,
   resolveGcfUrl,
+  buildDedicatedServiceAccountEmail,
+  discoverGcfServiceAccounts,
   checkSecretsExistInGCP,
   scanExistingResources,
   deployGCF,
