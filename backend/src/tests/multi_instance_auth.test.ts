@@ -850,8 +850,10 @@ test('checkRateLimit & authenticateRequest — reject >10 char X-Looker-User-ID 
 
     // Completing a valid handshake refunds a global/IP slot once per token, allowing another login
     releaseChallengeRefreshSlot('looker-attribute-challenge valid_tok_1', '1.2.3.4');
-    // Replaying the exact same token does not refund a second slot
+    // Replaying the exact same token (or with extra whitespace / uppercase hex / stripped prefix) does not refund a second slot
     releaseChallengeRefreshSlot('looker-attribute-challenge valid_tok_1', '1.2.3.4');
+    releaseChallengeRefreshSlot('looker-attribute-challenge    VALID_TOK_1   ', '1.2.3.4');
+    releaseChallengeRefreshSlot('valid_tok_1', '1.2.3.4');
     assert.equal(checkChallengeRefreshRateLimits('dev.looker.app', '11', '1.2.3.4'), true);
     assert.equal(checkChallengeRefreshRateLimits('dev.looker.app', '12', '1.2.3.4'), false);
     clearRateLimitsForTest();

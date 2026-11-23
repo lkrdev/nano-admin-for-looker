@@ -19,6 +19,7 @@ export interface AuthenticationResult {
   status: ChallengeVerificationResult | 'forbidden';
   tokenAgeMs?: number;
   authMode?: InstanceAuthMode;
+  challengeToken?: string;
 }
 
 export function isHostAllowed(host: string, allowedInstancesEnv?: string): boolean {
@@ -87,7 +88,15 @@ export function authenticateRequest(req: ff.Request): AuthenticationResult {
 
   const { status, tokenAgeMs } = verifyChallengeToken(sanitizedHost, userId, challenge);
   console.log(`[DEBUG] authenticateRequest: verifyChallengeToken result: ${status}, age: ${tokenAgeMs ? Math.round(tokenAgeMs / 1000) + 's' : 'N/A'}`);
-  return { trustedInstanceHost: sanitizedHost, trustedUserId: userId, userId, status, tokenAgeMs, authMode: 'server_proxy' };
+  return {
+    trustedInstanceHost: sanitizedHost,
+    trustedUserId: userId,
+    userId,
+    status,
+    tokenAgeMs,
+    authMode: 'server_proxy',
+    ...(status === 'valid' ? { challengeToken: challenge } : {})
+  };
 }
 
 /**

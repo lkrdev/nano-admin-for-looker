@@ -146,14 +146,25 @@ export function checkChallengeRefreshRateLimits(
  * budgets when a freshly issued challenge token succeeds authentication, so high
  * volumes of legitimate 2-step serverProxy logins do not exhaust the failure budget.
  */
+function canonicalizeChallengeToken(rawToken: string): string {
+  const trimmed = String(rawToken || '').trim();
+  if (!trimmed) return '';
+  const withoutPrefix = trimmed.replace(/^looker-attribute-challenge\s+/i, '').trim();
+  return withoutPrefix.toLowerCase();
+}
+
 export function releaseChallengeRefreshSlot(token: string, clientIp?: string): void {
-  if (!token) return;
-  const tokenHash = hashForLog(token);
+  const canonical = canonicalizeChallengeToken(token);
+  if (!canonical) return;
+  const tokenHash = hashForLog(canonical);
   if (refundedChallengeTokens.has(tokenHash)) {
     return;
   }
   if (refundedChallengeTokens.size >= RATE_LIMIT_SWEEP_THRESHOLD) {
-    refundedChallengeTokens.clear();
+    const oldest = refundedChallengeTokens.values().next().value;
+    if (oldest) {
+      refundedChallengeTokens.delete(oldest);
+    }
   }
   refundedChallengeTokens.add(tokenHash);
 

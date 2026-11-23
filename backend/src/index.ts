@@ -126,7 +126,7 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
     }
 
     // 1. Perform Authentication
-    const { trustedInstanceHost, trustedUserId, status, tokenAgeMs, authMode } = await authenticateRequestAsync(req);
+    const { trustedInstanceHost, trustedUserId, status, tokenAgeMs, authMode, challengeToken } = await authenticateRequestAsync(req);
     const userId = trustedUserId;
 
     if (status === 'forbidden') {
@@ -204,7 +204,7 @@ ff.http('nanoAdminBackend', (req: ff.Request, res: ff.Response) => {
 
     // Status is 'valid': If this was a newly provisioned challenge (<=10s old), refund the global/IP slot
     if (authMode !== 'oauth' && tokenAgeMs !== undefined && tokenAgeMs <= 10_000) {
-      releaseChallengeRefreshSlot(String(req.headers['authorization'] || ''), req.ip);
+      releaseChallengeRefreshSlot(challengeToken || String(req.headers['authorization'] || ''), req.ip);
     }
 
     // Perform asynchronous sliding refresh if challenge token is older than 1 hour
