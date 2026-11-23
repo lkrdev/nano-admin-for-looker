@@ -49,16 +49,15 @@ function sweepExpiredRateLimits(now: number): void {
   }
 }
 
-export function checkRateLimit(
-  userId: string,
-  maxRequests: number = 10,
-  windowMs: number = PER_CLIENT_RATE_LIMIT_WINDOW_MS
+function canConsumeRateLimit(
+  key: string,
+  maxRequests: number,
+  now: number
 ): boolean {
-  if (!userId || userId.length > MAX_RATE_LIMIT_KEY_LENGTH) {
+  if (!key || key.length > MAX_RATE_LIMIT_KEY_LENGTH) {
     return false;
   }
 
-  const now = Date.now();
   if (
     refreshLimits.size >= RATE_LIMIT_SWEEP_THRESHOLD &&
     now - lastRateLimitSweepAt >= RATE_LIMIT_SWEEP_INTERVAL_MS
@@ -66,8 +65,7 @@ export function checkRateLimit(
     sweepExpiredRateLimits(now);
   }
 
-  const limit = refreshLimits.get(userId);
-
+  const limit = refreshLimits.get(key);
   if (!limit || now > limit.resetTime) {
     if (!limit && refreshLimits.size >= MAX_RATE_LIMIT_ENTRIES) {
       if (now - lastRateLimitSweepAt >= RATE_LIMIT_SWEEP_INTERVAL_MS) {
@@ -77,15 +75,31 @@ export function checkRateLimit(
         return false;
       }
     }
-    refreshLimits.set(userId, { count: 1, resetTime: now + windowMs });
-    return true;
+    return maxRequests >= 1;
   }
 
-  if (limit.count >= maxRequests) {
+  return limit.count < maxRequests;
+}
+
+function consumeRateLimit(key: string, windowMs: number, now: number): void {
+  const limit = refreshLimits.get(key);
+  if (!limit || now > limit.resetTime) {
+    refreshLimits.set(key, { count: 1, resetTime: now + windowMs });
+    return;
+  }
+  limit.count++;
+}
+
+export function checkRateLimit(
+  userId: string,
+  maxRequests: number = 10,
+  windowMs: number = PER_CLIENT_RATE_LIMIT_WINDOW_MS
+): boolean {
+  const now = Date.now();
+  if (!canConsumeRateLimit(userId, maxRequests, now)) {
     return false;
   }
-
-  limit.count++;
+  consumeRateLimit(userId, windowMs, now);
   return true;
 }
 
@@ -94,6 +108,9 @@ export function checkRateLimit(
  * 1. Global budget: max 100 refreshes per 1 minute (override: CHALLENGE_GLOBAL_RATE_LIMIT_PER_MIN)
  * 2. Per-IP budget: max 10 refreshes per 5 minutes (override: CHALLENGE_IP_RATE_LIMIT_PER_5MIN)
  * 3. Per-user-and-host budget: max 10 refreshes per 5 minutes (override: CHALLENGE_USER_RATE_LIMIT_PER_5MIN)
+ *
+ * Evaluates all buckets before incrementing any counter so rejected requests from a
+ * rate-limited IP or user never consume global budget.
  */
 export function checkChallengeRefreshRateLimits(
   instanceHost: string,
@@ -104,13 +121,24 @@ export function checkChallengeRefreshRateLimits(
   const ipMax = parsePositiveIntEnv('CHALLENGE_IP_RATE_LIMIT_PER_5MIN', 10);
   const userMax = parsePositiveIntEnv('CHALLENGE_USER_RATE_LIMIT_PER_5MIN', 10);
 
-  if (!checkRateLimit('__global_refresh__', globalMax, GLOBAL_RATE_LIMIT_WINDOW_MS)) {
-    return false;
+  const buckets: Array<{ key: string; max: number; windowMs: number }> = [
+    { key: `${instanceHost}_${userId}`, max: userMax, windowMs: PER_CLIENT_RATE_LIMIT_WINDOW_MS }
+  ];
+  if (clientIp) {
+    buckets.push({ key: `ip:${clientIp}`, max: ipMax, windowMs: PER_CLIENT_RATE_LIMIT_WINDOW_MS });
   }
-  if (clientIp && !checkRateLimit(`ip:${clientIp}`, ipMax, PER_CLIENT_RATE_LIMIT_WINDOW_MS)) {
-    return false;
+  buckets.push({ key: '__global_refresh__', max: globalMax, windowMs: GLOBAL_RATE_LIMIT_WINDOW_MS });
+
+  const now = Date.now();
+  for (const bucket of buckets) {
+    if (!canConsumeRateLimit(bucket.key, bucket.max, now)) {
+      return false;
+    }
   }
-  return checkRateLimit(`${instanceHost}_${userId}`, userMax, PER_CLIENT_RATE_LIMIT_WINDOW_MS);
+  for (const bucket of buckets) {
+    consumeRateLimit(bucket.key, bucket.windowMs, now);
+  }
+  return true;
 }
 
 /**

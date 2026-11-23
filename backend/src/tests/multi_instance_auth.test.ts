@@ -863,6 +863,17 @@ test('checkRateLimit & authenticateRequest — reject >10 char X-Looker-User-ID 
     assert.equal(checkChallengeRefreshRateLimits('dev.looker.app', '101', '9.9.9.9'), false);
     clearRateLimitsForTest();
 
+    // Rejected per-IP requests do NOT consume global refresh budget
+    for (let i = 1; i <= 10; i++) {
+      assert.equal(checkChallengeRefreshRateLimits('dev.looker.app', String(i), '203.0.113.5'), true);
+    }
+    for (let i = 11; i <= 200; i++) {
+      assert.equal(checkChallengeRefreshRateLimits('dev.looker.app', String(i), '203.0.113.5'), false);
+    }
+    // Another IP/user still succeeds because global budget only used 10/100
+    assert.equal(checkChallengeRefreshRateLimits('dev.looker.app', '500', '198.51.100.2'), true);
+    clearRateLimitsForTest();
+
     // 2. Oversized key is rejected in checkRateLimit
     assert.equal(checkRateLimit('x'.repeat(257)), false);
 
