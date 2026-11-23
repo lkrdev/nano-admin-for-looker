@@ -26,6 +26,7 @@ export interface NormalizedGroupOwnersParameters {
   user_id_limitation: {
     mode: UserIdLimitationMode;
     attribute_name: string;
+    include_subgroups: boolean;
   };
   memberships: MembershipsParameters;
 }
@@ -103,7 +104,8 @@ export function normalizeGroupOwnersParameters(
     include_subgroups: includeSubgroups,
     user_id_limitation: {
       mode: normalizedMode,
-      attribute_name: attributeName
+      attribute_name: attributeName,
+      include_subgroups: Boolean(rawLimitation.include_subgroups)
     },
     memberships
   };

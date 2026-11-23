@@ -400,7 +400,7 @@ export async function resolveUserIdLimitation(
     const includeSubgroups = Boolean(limitation?.include_subgroups);
     const [scopeUserIds, scopeGroupIds] = await Promise.all([
       getScopeGroupUserIds(sdk, currentUserId, attributeName, includeSubgroups),
-      getScopeGroupIds(sdk, currentUserId, attributeName, true)
+      getScopeGroupIds(sdk, currentUserId, attributeName, includeSubgroups)
     ]);
 
     if (mode === 'scope_groups_minus_privileged') {

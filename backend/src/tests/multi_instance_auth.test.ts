@@ -2,7 +2,7 @@ process.env.GCF_HMAC_SECRET = process.env.GCF_HMAC_SECRET || 'test_secret_for_te
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resolveAuthorizedGroups, isUserAuthorized, clearWorkflowCache, setCachedWorkflows, getPrivilegedUserIds } from '../auth_utils';
+import { resolveAuthorizedGroups, isUserAuthorized, clearWorkflowCache, setCachedWorkflows, getPrivilegedUserIds, resolveUserIdLimitation } from '../auth_utils';
 import { isHostAllowed, authenticateRequest } from '../auth';
 import {
   getChallengeAttributeId,
@@ -952,5 +952,36 @@ test('workflow-groups-manager handler — manage_group_members blocks add and re
   });
   assert.equal(res.success, true);
   assert.deepEqual(removedCalls, [{ groupId: '10', userId: '1' }]);
+});
+
+test('resolveUserIdLimitation — scopeGroupIds respects limitation.include_subgroups flag', async () => {
+  const sdk: any = {
+    ok: async (val: any) => await val,
+    user: async () => ({ id: '100', group_ids: ['10'] }),
+    all_user_attributes: async () => [
+      { id: 'attr_scope', name: 'nano_admin_is_workflow_scope_group' }
+    ],
+    all_user_attribute_group_values: async () => [{ group_id: '10', value: 'yes' }],
+    search_groups_with_hierarchy: async () => [
+      { id: '10', name: 'Scope Root', parent_group_ids: [] },
+      { id: '11', name: 'Scope Child', parent_group_ids: ['10'] }
+    ],
+    all_group_users: async ({ group_id }: any) =>
+      String(group_id) === '10' ? [{ id: '100' }] : [{ id: '200' }]
+  };
+
+  const withoutSubgroups = await resolveUserIdLimitation(sdk, '100', {
+    mode: 'scope_groups',
+    include_subgroups: false
+  });
+  assert.deepEqual(withoutSubgroups.scopeGroupIds, ['10']);
+  assert.deepEqual(withoutSubgroups.userIds, ['100']);
+
+  const withSubgroups = await resolveUserIdLimitation(sdk, '100', {
+    mode: 'scope_groups',
+    include_subgroups: true
+  });
+  assert.deepEqual(withSubgroups.scopeGroupIds, ['10', '11']);
+  assert.deepEqual(withSubgroups.userIds, ['100', '200']);
 });
 

@@ -373,11 +373,11 @@ test('group-owners: update_group_owner adds/removes owners and blocks privileged
     /403 Forbidden: Group owner operations are not supported under user_id_limitation mode "exclude_privileged"/i
   );
 
-  // 5. Under scope_groups:
+  // 5. Under scope_groups (with include_subgroups: true):
   //    - delimiter/specifier injection & out-of-scope groups are rejected
   //    - unowned groups inside the active Scope Group ('40' under '10') CAN be added as group owner
-  //    - groups containing out-of-scope users ('1') are still rejected
-  const scopedCtx = makeContext(sdk, { user_id_limitation: { mode: 'scope_groups' } }, '100');
+  //    - with include_subgroups: false, descendant subgroup '21' is outside allowed scope groups
+  const scopedCtx = makeContext(sdk, { user_id_limitation: { mode: 'scope_groups', include_subgroups: true } }, '100');
   await assert.rejects(
     async () =>
       await handler(scopedCtx, 'update_group_owner', {
@@ -407,22 +407,21 @@ test('group-owners: update_group_owner adds/removes owners and blocks privileged
   });
   assert.equal(addScopedGroupOwnerRes.raw_value, 'u:100,g:10,g:40');
 
-  const origAllGroupUsers = sdk.all_group_users;
-  sdk.all_group_users = async (p: any) => {
-    if (String(p?.group_id) === '21') return [{ id: '1' }, { id: '200' }];
-    return origAllGroupUsers(p);
-  };
+  const scopedNoSubgroupsCtx = makeContext(
+    sdk,
+    { user_id_limitation: { mode: 'scope_groups', include_subgroups: false } },
+    '100'
+  );
   await assert.rejects(
     async () =>
-      await handler(scopedCtx, 'update_group_owner', {
+      await handler(scopedNoSubgroupsCtx, 'update_group_owner', {
         group_id: '20',
         owner_type: 'group',
         owner_id: '21',
         operation: 'add'
       }),
-    /403 Forbidden: Group "21" contains user "1" outside the allowed user_id_limitation/i
+    /403 Forbidden: Group "21" is outside the allowed scope groups/i
   );
-  sdk.all_group_users = origAllGroupUsers;
 
   // 7. Removing an out-of-scope/privileged user owner ('1') is rejected
   await assert.rejects(
@@ -474,7 +473,7 @@ test('group-owners: child subgroup mutations enforce hierarchy cycle detection a
   const ctx = makeContext(
     sdk,
     {
-      user_id_limitation: { mode: 'scope_groups' },
+      user_id_limitation: { mode: 'scope_groups', include_subgroups: true },
       memberships: {
         allow_add_existing_groups: true,
         allow_remove_child_groups: true,
@@ -516,7 +515,7 @@ test('group-owners: child subgroup mutations enforce hierarchy cycle detection a
   const ctxBothOwned = makeContext(
     sdkBothOwned,
     {
-      user_id_limitation: { mode: 'scope_groups' },
+      user_id_limitation: { mode: 'scope_groups', include_subgroups: true },
       memberships: {
         allow_add_existing_groups: true,
         allow_remove_child_groups: true,
@@ -537,7 +536,7 @@ test('group-owners: child subgroup mutations enforce hierarchy cycle detection a
     sdkUnownedInScope,
     {
       include_subgroups: false,
-      user_id_limitation: { mode: 'scope_groups' },
+      user_id_limitation: { mode: 'scope_groups', include_subgroups: true },
       memberships: {
         allow_add_existing_groups: true,
         allow_remove_child_groups: true,
